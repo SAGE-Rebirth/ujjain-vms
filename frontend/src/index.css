@@ -1,0 +1,119 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { --saffron: #f97316; --indigo: #312e81; }
+
+html, body, #root { height: 100%; }
+body {
+  font-family: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-feature-settings: 'cv11', 'ss01';
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  color: #1e293b;                 /* slate-800 — strong default text */
+  font-size: 16px;                /* generous base — bump the whole scale up */
+  line-height: 1.55;
+}
+
+/* Accessible focus ring everywhere (WCAG 2.4.7); indigo on light, white on dark. */
+*:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; border-radius: 6px; }
+.on-dark *:focus-visible { outline-color: #fff; }
+
+/* Tactile button feel — works on touch (no hover) and mouse alike, subtle not flashy.
+   `touch-manipulation` removes the 300ms mobile tap delay. */
+button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+@media (prefers-reduced-motion: no-preference) {
+  button:not(:disabled) {
+    transition: transform .12s ease, box-shadow .18s ease,
+                background-color .18s ease, border-color .18s ease, color .18s ease;
+  }
+  button:not(:disabled):active { transform: scale(.97); }
+}
+
+/* ----- animations (CSS only — no runtime lib) ----- */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes popIn  { 0% { opacity: 0; transform: scale(.94); } 60% { transform: scale(1.02); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes pulse  { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+@keyframes shimmer { 100% { background-position: -200% 0; } }
+@keyframes riseIn  { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: none; } }
+@keyframes floaty  { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-16px); } }
+@keyframes spinSlow { to { transform: rotate(360deg); } }
+@keyframes glowPulse { 0%,100% { opacity: .45; transform: scale(1); } 50% { opacity: .85; transform: scale(1.08); } }
+@keyframes gradPan { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+.fade-up { animation: fadeUp .26s cubic-bezier(.22,.61,.36,1) both; }
+.pop-in  { animation: popIn .28s cubic-bezier(.22,.61,.36,1) both; }
+.live-dot { animation: pulse 1.6s ease-in-out infinite; }
+.rise-in { animation: riseIn .55s cubic-bezier(.22,.61,.36,1) both; }
+.float-slow   { animation: floaty 6s ease-in-out infinite; }
+.float-slower { animation: floaty 9s ease-in-out infinite; }
+.mandala   { animation: spinSlow 70s linear infinite; }
+.glow-pulse { animation: glowPulse 4.5s ease-in-out infinite; }
+.skeleton {
+  background: linear-gradient(90deg,#eef2f7 25%,#e2e8f0 37%,#eef2f7 63%);
+  background-size: 200% 100%; animation: shimmer 1.3s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fade-up, .pop-in, .live-dot, .skeleton,
+  .rise-in, .float-slow, .float-slower, .mandala, .glow-pulse, .bg-portal-anim { animation: none; }
+}
+
+/* ----- citizen app shell -----
+   Mobile (<768px): fills the viewport like a native app — fixed header, inner
+   scroll area, bottom tab bar.
+   Desktop (>=768px): a real responsive WEB page — top nav, full-width content
+   that flows and scrolls with the window. No phone card. */
+.app-shell {
+  width: 100%; height: 100%; background: #fff; display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.app-screen { flex: 1; overflow-y: auto; overflow-x: hidden; }
+.app-screen::-webkit-scrollbar { width: 6px; }
+.app-screen::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 9999px; }
+@media (min-width: 768px) {
+  .app-shell { height: auto; min-height: 100%; overflow: visible; background: transparent; }
+  .app-screen { overflow: visible; }
+}
+
+/* ----- ticket perforation ----- */
+.ticket-perf { position: relative; border-top: 2px dashed #cbd5e1; }
+.ticket-perf::before, .ticket-perf::after {
+  content: ''; position: absolute; top: -11px; width: 20px; height: 20px;
+  border-radius: 9999px; background: #f8fafc;
+}
+.ticket-perf::before { left: -10px; }
+.ticket-perf::after  { right: -10px; }
+
+/* ----- gradients ----- */
+.bg-portal { background:
+  radial-gradient(1200px 600px at 18% -12%, rgba(249,115,22,.28), transparent 60%),
+  radial-gradient(900px 520px at 100% 0%, rgba(99,102,241,.30), transparent 55%),
+  linear-gradient(165deg, #1e1b4b 0%, #312e81 55%, #4338ca 100%); }
+.bg-saffron-grad { background: linear-gradient(135deg, #fb923c 0%, #f97316 60%, #ea580c 100%); }
+
+/* Animated, layered backdrop for the landing page — slow gradient drift. */
+.bg-portal-anim {
+  background:
+    radial-gradient(1100px 560px at 16% -10%, rgba(249,115,22,.30), transparent 60%),
+    radial-gradient(900px 520px at 102% 2%, rgba(99,102,241,.34), transparent 55%),
+    radial-gradient(820px 520px at 50% 118%, rgba(168,85,247,.24), transparent 60%),
+    linear-gradient(160deg, #140f37 0%, #1e1b4b 38%, #312e81 72%, #4338ca 100%);
+  background-size: 100% 100%, 100% 100%, 100% 100%, 200% 200%;
+  animation: gradPan 20s ease-in-out infinite;
+}
+/* Faint dot lattice + a pointer-following spotlight (interactive). */
+.dot-grid {
+  background-image: radial-gradient(rgba(255,255,255,.07) 1px, transparent 1px);
+  background-size: 26px 26px;
+}
+.spotlight {
+  background: radial-gradient(260px circle at var(--mx, 50%) var(--my, 30%),
+              rgba(255,255,255,.13), transparent 55%);
+  transition: background .08s ease-out;
+}
+.blob { position: absolute; border-radius: 9999px; filter: blur(64px); pointer-events: none; }
+/* Pointer-parallax layers: smoothly ease toward the cursor-driven transform. */
+.parallax { transition: transform .25s cubic-bezier(.22,.61,.36,1); will-change: transform; }
+.text-gradient-saffron {
+  background: linear-gradient(100deg, #fde68a, #fb923c 45%, #f97316 70%, #fdba74);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
