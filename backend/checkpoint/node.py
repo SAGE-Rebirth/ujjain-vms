@@ -28,7 +28,7 @@ import httpx
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from shared import tickets  # noqa: E402
@@ -59,8 +59,13 @@ def now_iso() -> str:
 
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.row_factory = sqlite3.Row
+    # WAL keeps the gate responsive: a verify-write never blocks a concurrent
+    # status read, and busy_timeout rides out the brief sync write burst.
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA busy_timeout = 10000")
     return conn
 
 
@@ -134,6 +139,17 @@ def init_db() -> None:
     for col in ("plate", "vdesc", "lot_id", "assigned_lot"):
         if col not in have:
             conn.execute(f"ALTER TABLE cached_bookings ADD COLUMN {col} TEXT")
+    # Hot-path indexes for the offline decision (code lookup, parked-vehicle list,
+    # unsynced-log scan). Created after the column migration so all refs exist.
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS ix_cached_code     ON cached_bookings(code);
+        CREATE INDEX IF NOT EXISTS ix_cached_status   ON cached_bookings(status, assigned_lot);
+        CREATE INDEX IF NOT EXISTS ix_scanlog_synced  ON scan_log(synced);
+        CREATE INDEX IF NOT EXISTS ix_scanlog_ts      ON scan_log(ts);
+        CREATE INDEX IF NOT EXISTS ix_assign_synced   ON assignment_events(synced);
+        """
+    )
     conn.commit()
     conn.close()
     _load_pubkey_from_disk()
@@ -228,6 +244,7 @@ def status():
 
 @app.get("/log")
 def get_log(limit: int = 25):
+    limit = max(1, min(limit, 200))
     conn = connect()
     rows = conn.execute(
         "SELECT * FROM scan_log ORDER BY ts DESC LIMIT ?", (limit,)
@@ -274,9 +291,9 @@ def parked():
 
 
 class ReassignReq(BaseModel):
-    booking_id: str
-    to_lot: str
-    reason: str = ""
+    booking_id: str = Field(min_length=1, max_length=64)
+    to_lot: str = Field(min_length=1, max_length=64)
+    reason: str = Field(default="", max_length=200)
 
 
 @app.post("/reassign")
@@ -325,9 +342,9 @@ def reassign(req: ReassignReq):
 # The 5-second admit/deny decision — OFFLINE CAPABLE
 # --------------------------------------------------------------------------- #
 class VerifyReq(BaseModel):
-    token: str | None = None            # full QR payload
-    code: str | None = None             # 6-char operator-typed fallback
-    observed_plate: str | None = None   # plate the operator actually sees on the vehicle
+    token: str | None = Field(default=None, max_length=4096)  # full QR payload
+    code: str | None = Field(default=None, max_length=16)     # 6-char operator fallback
+    observed_plate: str | None = Field(default=None, max_length=20)  # plate seen on vehicle
 
 
 def trusted_now(conn) -> datetime:

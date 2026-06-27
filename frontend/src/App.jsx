@@ -35,7 +35,8 @@ const STATS = [
 const SECTIONS = {
   citizen: [['home', 'Home'], ['book', 'Book a slot'], ['passes', 'My Passes']],
   operator: [['scan', 'Scanner'], ['lots', 'Parking'], ['reassign', 'Reassign'], ['activity', 'Activity'], ['node', 'Node']],
-  command: [['dash', 'Dashboard'], ['parking', 'Parking'], ['capacity', 'Capacity'], ['audit', 'Audit']],
+  command: [['dash', 'Dashboard'], ['parking', 'Parking'], ['capacity', 'Capacity'],
+            ['pricing', 'Pricing'], ['operators', 'Operators'], ['audit', 'Audit']],
 }
 const DEFAULT_SECTION = { citizen: 'home', operator: 'scan', command: 'dash' }
 const ROLES = ['citizen', 'operator', 'command']

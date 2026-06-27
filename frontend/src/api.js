@@ -31,6 +31,27 @@ export const clearCitizen = () => localStorage.removeItem('citizen')
 const staffH = () => { const s = getStaff(); return s ? { Authorization: `Bearer ${s.token}` } : {} }
 const citizenH = () => { const c = getCitizen(); return c ? { Authorization: `Bearer ${c.token}` } : {} }
 
+// ── Single-session handling ────────────────────────────────────────────────
+// The backend now keeps ONE live session per identity: a fresh login elsewhere
+// (or a logout) makes this device's token dead → the next authed call returns 401.
+// `jScope` catches that, drops the stale local token, and fires `auth:expired` so
+// the app can drop to its login screen instead of looping on failed requests.
+function emitExpired(scope) {
+  try { window.dispatchEvent(new CustomEvent('auth:expired', { detail: { scope } })) } catch {}
+}
+async function jScope(scope, url, opts = {}) {
+  const h = scope === 'staff' ? staffH() : citizenH()
+  try {
+    return await j(url, { ...opts, headers: { ...h, ...(opts.headers || {}) } })
+  } catch (e) {
+    if (e.status === 401) {
+      if (scope === 'staff') clearStaff(); else clearCitizen()
+      emitExpired(scope)
+    }
+    throw e
+  }
+}
+
 // staff + citizen auth
 export const login = (username, password) =>
   j(`${CENTRAL}/api/auth/login`, { method: 'POST', body: JSON.stringify({ username, password }) })
@@ -38,7 +59,18 @@ export const otpRequest = (phone) =>
   j(`${CENTRAL}/api/auth/otp/request`, { method: 'POST', body: JSON.stringify({ phone }) })
 export const otpVerify = (phone, code) =>
   j(`${CENTRAL}/api/auth/otp/verify`, { method: 'POST', body: JSON.stringify({ phone, code }) })
-export const myBookings = () => j(`${CENTRAL}/api/my/bookings`, { headers: citizenH() })
+export const myBookings = () => jScope('citizen', `${CENTRAL}/api/my/bookings`)
+
+// Logout — end the server session (kills the token everywhere) THEN clear locally.
+// Best-effort: a network failure still clears the device so the user isn't stuck.
+export async function logoutStaff() {
+  try { await j(`${CENTRAL}/api/auth/logout`, { method: 'POST', headers: staffH() }) } catch {}
+  clearStaff()
+}
+export async function logoutCitizen() {
+  try { await j(`${CENTRAL}/api/auth/logout`, { method: 'POST', headers: citizenH() }) } catch {}
+  clearCitizen()
+}
 
 // citizen booking
 export const listZones = (date) => j(`${CENTRAL}/api/zones?date=${date}`)
@@ -46,45 +78,98 @@ export const zoneSlots = (zone, date, type = 'public') =>
   j(`${CENTRAL}/api/zones/${zone}/slots?date=${date}&slot_type=${type}`)
 export const zoneLots = (zone) => j(`${CENTRAL}/api/zones/${zone}/lots`)
 export const createBooking = (body) =>
-  j(`${CENTRAL}/api/bookings`, { method: 'POST', body: JSON.stringify(body), headers: citizenH() })
+  jScope('citizen', `${CENTRAL}/api/bookings`, { method: 'POST', body: JSON.stringify(body) })
 export const getBooking = (id) => j(`${CENTRAL}/api/bookings/${id}`)
+
+// ── Pricing (public read) + payments ───────────────────────────────────────
+export const getPricing = () => j(`${CENTRAL}/api/pricing`)
+// Create a Razorpay order for the chosen lane/vehicle. Server computes the amount.
+export const createOrder = (body) =>
+  jScope('citizen', `${CENTRAL}/api/payments/order`, { method: 'POST', body: JSON.stringify(body) })
+
+// Load Razorpay's checkout.js once (only needed in LIVE mode).
+export function loadRazorpay() {
+  return new Promise((res, rej) => {
+    if (window.Razorpay) return res()
+    const s = document.createElement('script')
+    s.src = 'https://checkout.razorpay.com/v1/checkout.js'
+    s.onload = () => res()
+    s.onerror = () => rej(new Error('could not load Razorpay checkout'))
+    document.body.appendChild(s)
+  })
+}
+
+// Open Razorpay checkout for an order; resolves with the payment proof, rejects on
+// dismiss/failure. In mock mode the caller skips this and fabricates the proof.
+export async function razorpayCheckout(order, who = {}) {
+  await loadRazorpay()
+  return new Promise((resolve, reject) => {
+    const rzp = new window.Razorpay({
+      key: order.key_id, amount: order.amount_paise, currency: order.currency,
+      name: order.name, description: order.description, order_id: order.order_id,
+      prefill: { contact: who.phone || '' },
+      theme: { color: '#4f46e5' },
+      handler: (r) => resolve({
+        razorpay_order_id: r.razorpay_order_id,
+        razorpay_payment_id: r.razorpay_payment_id,
+        razorpay_signature: r.razorpay_signature,
+      }),
+      modal: { ondismiss: () => reject(new Error('payment cancelled')) },
+    })
+    rzp.on('payment.failed', (r) => reject(new Error(r.error?.description || 'payment failed')))
+    rzp.open()
+  })
+}
 // Cancel a still-valid booking (frees capacity; the gate then denies the pass,
 // even offline, once the cancellation syncs).
 export const cancelBooking = (id) =>
-  j(`${CENTRAL}/api/bookings/${id}/cancel`, { method: 'POST', headers: citizenH() })
+  jScope('citizen', `${CENTRAL}/api/bookings/${id}/cancel`, { method: 'POST' })
 
 // admin (staff token required)
-export const overview = (date) => j(`${CENTRAL}/api/admin/overview?date=${date}`, { headers: staffH() })
-export const audit = () => j(`${CENTRAL}/api/admin/audit?limit=80`, { headers: staffH() })
+export const overview = (date) => jScope('staff', `${CENTRAL}/api/admin/overview?date=${date}`)
+export const audit = () => jScope('staff', `${CENTRAL}/api/admin/audit?limit=80`)
 export const setLockdown = (scope, reason) =>
-  j(`${CENTRAL}/api/admin/lockdown`, {
-    method: 'POST', body: JSON.stringify({ scope, reason }), headers: staffH(),
+  jScope('staff', `${CENTRAL}/api/admin/lockdown`, {
+    method: 'POST', body: JSON.stringify({ scope, reason }),
   })
 // Two-person lift: the acting commander's token + a second commander's credentials.
 export const liftLockdown = (scope, second_username, second_password) =>
-  j(`${CENTRAL}/api/admin/lockdown/${scope}/lift`, {
-    method: 'POST', body: JSON.stringify({ second_username, second_password }), headers: staffH(),
+  jScope('staff', `${CENTRAL}/api/admin/lockdown/${scope}/lift`, {
+    method: 'POST', body: JSON.stringify({ second_username, second_password }),
   })
 export const setCapacity = (zone_id, date, capacity) =>
-  j(`${CENTRAL}/api/admin/capacity`, {
-    method: 'POST', body: JSON.stringify({ zone_id, date, capacity }), headers: staffH(),
+  jScope('staff', `${CENTRAL}/api/admin/capacity`, {
+    method: 'POST', body: JSON.stringify({ zone_id, date, capacity }),
   })
 // Reconcile no-shows for a date (commander). `as_of` defaults to end-of-day so the
 // 2028-dated demo can show capacity being reclaimed.
 export const reconcileNoshows = (date, as_of) =>
-  j(`${CENTRAL}/api/admin/reconcile`, {
-    method: 'POST', body: JSON.stringify({ date, as_of }), headers: staffH(),
+  jScope('staff', `${CENTRAL}/api/admin/reconcile`, {
+    method: 'POST', body: JSON.stringify({ date, as_of }),
   })
 
 // checkpoint node lifecycle (command centre brings a zone's gate up/down) +
 // parking visualisation. Central is the source of truth for gate base URLs now,
 // so the UI no longer needs a hand-managed list.
-export const nodesList = () => j(`${CENTRAL}/api/admin/nodes`, { headers: staffH() })
+// Pricing admin (commander) — `items` = [{slot_type, vtype, price}, …]
+export const setPricing = (items) =>
+  jScope('staff', `${CENTRAL}/api/admin/pricing`, {
+    method: 'POST', body: JSON.stringify({ items }),
+  })
+
+// Gate-operator account management (commander)
+export const listOperators = () => jScope('staff', `${CENTRAL}/api/admin/operators`)
+export const addOperator = (body) =>
+  jScope('staff', `${CENTRAL}/api/admin/operators`, { method: 'POST', body: JSON.stringify(body) })
+export const removeOperator = (username) =>
+  jScope('staff', `${CENTRAL}/api/admin/operators/${encodeURIComponent(username)}`, { method: 'DELETE' })
+
+export const nodesList = () => jScope('staff', `${CENTRAL}/api/admin/nodes`)
 export const nodeUp = (zone) =>
-  j(`${CENTRAL}/api/admin/nodes/${zone}/up`, { method: 'POST', headers: staffH() })
+  jScope('staff', `${CENTRAL}/api/admin/nodes/${zone}/up`, { method: 'POST' })
 export const nodeDown = (zone) =>
-  j(`${CENTRAL}/api/admin/nodes/${zone}/down`, { method: 'POST', headers: staffH() })
-export const parking = (date) => j(`${CENTRAL}/api/admin/parking?date=${date}`, { headers: staffH() })
+  jScope('staff', `${CENTRAL}/api/admin/nodes/${zone}/down`, { method: 'POST' })
+export const parking = (date) => jScope('staff', `${CENTRAL}/api/admin/parking?date=${date}`)
 
 // checkpoint node
 export const cpStatus = () => j(`${getCheckpointBase()}/status`)

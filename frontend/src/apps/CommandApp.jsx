@@ -1,29 +1,44 @@
 import React, { useEffect, useState } from 'react'
 import {
   overview, audit, setLockdown, liftLockdown, setCapacity, reconcileNoshows,
-  login, getStaff, setStaff, clearStaff,
+  login, getStaff, setStaff, logoutStaff,
   nodesList, nodeUp, nodeDown, parking, cpStatusAt, cpSyncAt,
+  getPricing, setPricing, listOperators, addOperator, removeOperator,
 } from '../api.js'
 import { Card, Badge, Button, Stat, Modal, Skeleton, Spinner, Switch, staleness, vehicleIcon } from '../ui/components.jsx'
 
 const TITLES = {
   dash: 'Live operations', parking: 'Parking map',
-  capacity: 'Capacity planner', audit: 'Audit log',
+  capacity: 'Capacity planner', pricing: 'Pricing',
+  operators: 'Gate operators', audit: 'Audit log',
 }
 
 // Command Centre is gated: only an authenticated commander reaches the console.
 export default function CommandApp({ date, section }) {
   const [staff, setStaffState] = useState(getStaff())
+  // Single-session: another login for this commander (or a logout) kills this
+  // token. `auth:expired` fires on the next 401 → drop to the login screen with a
+  // notice instead of silently failing every poll.
+  const [expired, setExpired] = useState(false)
+  useEffect(() => {
+    const onExpired = (e) => {
+      if (e.detail?.scope !== 'staff') return
+      setStaffState(null); setExpired(true)
+    }
+    window.addEventListener('auth:expired', onExpired)
+    return () => window.removeEventListener('auth:expired', onExpired)
+  }, [])
+
   if (!staff || staff.role !== 'commander') {
-    return <CommandLogin onLogin={setStaffState} />
+    return <CommandLogin expired={expired} onLogin={(s) => { setExpired(false); setStaffState(s) }} />
   }
   return (
     <CommandConsole date={date} section={section} staff={staff}
-      onLogout={() => { clearStaff(); setStaffState(null) }} />
+      onLogout={async () => { await logoutStaff(); setStaffState(null) }} />
   )
 }
 
-function CommandLogin({ onLogin }) {
+function CommandLogin({ onLogin, expired }) {
   const [u, setU] = useState(''); const [p, setP] = useState('')
   const [busy, setBusy] = useState(false); const [err, setErr] = useState('')
   const submit = async (e) => {
@@ -43,6 +58,11 @@ function CommandLogin({ onLogin }) {
       </div>
       <Card className="p-6">
         <form onSubmit={submit} className="space-y-3">
+          {expired && !err && (
+            <div role="status" className="bg-amber-100 text-amber-800 rounded-xl p-3 text-sm">
+              Session ended — this account was signed in on another device, or signed out.
+            </div>
+          )}
           {err && <div role="alert" className="bg-rose-100 text-rose-700 rounded-xl p-3 text-sm">{err}</div>}
           <input value={u} onChange={(e) => setU(e.target.value)} placeholder="username"
             autoCapitalize="none" className="w-full border border-slate-300 rounded-xl px-4 py-3" />
@@ -212,6 +232,10 @@ function CommandConsole({ date, section, staff, onLogout }) {
             </div>
           </Card>
         )}
+
+        {section === 'pricing' && <PricingTab onErr={setErr} />}
+
+        {section === 'operators' && <OperatorsTab zones={data.zones} onErr={setErr} />}
 
         {section === 'audit' && <AuditFeed logs={logs} />}
       </div>
@@ -637,6 +661,190 @@ function DashSkeleton() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-28" />)}</div>
       <Skeleton className="h-80" />
     </div>
+  )
+}
+
+// ── Pricing planner — per-lane × per-vehicle fares, fetched + saved live ────
+const PRICE_VTYPES = [['2w', '🏍 2-wheeler'], ['car', '🚗 Car'], ['bus', '🚌 Bus']]
+const PRICE_LANES = [['public', 'Public'], ['vip', '⭐ VIP']]
+
+function PricingTab({ onErr }) {
+  const [pricing, setP] = useState(null)
+  const [draft, setDraft] = useState({})
+  const [saving, setSaving] = useState(false)
+  const [note, setNote] = useState('')
+
+  const load = () => getPricing()
+    .then((r) => { setP(r.pricing); setDraft(r.pricing) })
+    .catch((e) => onErr(e.message))
+  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!pricing) return <Skeleton className="h-64" />
+
+  const setCell = (lane, vt, val) =>
+    setDraft((d) => ({ ...d, [lane]: { ...d[lane], [vt]: val } }))
+
+  const changed = []
+  for (const [lane] of PRICE_LANES) for (const [vt] of PRICE_VTYPES) {
+    const v = Number(draft[lane]?.[vt])
+    if (Number.isFinite(v) && v >= 0 && v !== pricing[lane]?.[vt]) {
+      changed.push({ slot_type: lane, vtype: vt, price: v })
+    }
+  }
+
+  const save = async () => {
+    if (!changed.length) return
+    setSaving(true); onErr(''); setNote('')
+    try {
+      const r = await setPricing(changed)
+      setP(r.pricing); setDraft(r.pricing)
+      setNote(`Updated ${changed.length} fare${changed.length === 1 ? '' : 's'}.`)
+    } catch (e) { onErr(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <Card>
+      <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <div className="text-lg font-bold text-slate-800">Lane pricing (INR)</div>
+          <div className="text-sm text-slate-500">Citizens see these fares live at booking — emergency is always free.</div>
+        </div>
+        {note && <Badge tone="green">{note}</Badge>}
+      </div>
+      <div className="p-6 overflow-x-auto">
+        <table className="w-full text-sm min-w-[420px]">
+          <thead>
+            <tr className="text-slate-500 text-left">
+              <th className="font-semibold pb-3">Vehicle</th>
+              {PRICE_LANES.map(([id, label]) => <th key={id} className="font-semibold pb-3 px-3">{label}</th>)}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {PRICE_VTYPES.map(([vt, label]) => (
+              <tr key={vt}>
+                <td className="py-3 font-medium text-slate-700">{label}</td>
+                {PRICE_LANES.map(([lane]) => (
+                  <td key={lane} className="py-3 px-3">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-slate-400">₹</span>
+                      <input type="number" min="0" value={draft[lane]?.[vt] ?? ''}
+                        onChange={(e) => setCell(lane, vt, e.target.value)}
+                        aria-label={`${lane} ${vt} price`}
+                        className="w-28 border border-slate-300 rounded-lg px-3 py-2 tabular-nums" />
+                    </div>
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="flex justify-end mt-5">
+          <Button variant="indigo" className="px-6" disabled={saving || !changed.length} onClick={save}>
+            {saving ? <Spinner /> : changed.length ? `Save ${changed.length} change${changed.length === 1 ? '' : 's'}` : 'No changes'}
+          </Button>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+// ── Gate operators — add / list / remove zone-bound operator accounts ───────
+function OperatorsTab({ zones, onErr }) {
+  const [ops, setOps] = useState(null)
+  const [form, setForm] = useState({
+    username: '', password: '', display_name: '', zone_id: zones[0]?.id || '',
+  })
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
+
+  const load = () => listOperators().then(setOps).catch((e) => onErr(e.message))
+  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
+  const valid = form.username.trim().length >= 3 && form.password.length >= 6
+    && form.display_name.trim() && form.zone_id
+
+  const add = async (e) => {
+    e.preventDefault()
+    if (!valid) return
+    setBusy(true); onErr(''); setNote('')
+    try {
+      await addOperator({
+        username: form.username.trim().toLowerCase(), password: form.password,
+        display_name: form.display_name.trim(), zone_id: form.zone_id,
+      })
+      setNote(`Added ${form.username.trim().toLowerCase()}.`)
+      setForm((f) => ({ ...f, username: '', password: '', display_name: '' }))
+      load()
+    } catch (e2) { onErr(e2.message) } finally { setBusy(false) }
+  }
+  const del = async (u) => {
+    onErr('')
+    try { await removeOperator(u); load() } catch (e) { onErr(e.message) }
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card className="p-6">
+        <div className="text-lg font-bold text-slate-800 mb-1">Add a gate operator</div>
+        <p className="text-sm text-slate-500 mb-4">Creates a checkpoint login bound to one zone.</p>
+        <form onSubmit={add} className="grid sm:grid-cols-2 gap-3">
+          <input value={form.username} onChange={set('username')} placeholder="username (e.g. op.indore2)"
+            autoCapitalize="none" className="border border-slate-300 rounded-xl px-4 py-2.5" />
+          <input value={form.display_name} onChange={set('display_name')} placeholder="display name"
+            className="border border-slate-300 rounded-xl px-4 py-2.5" />
+          <input value={form.password} onChange={set('password')} type="password"
+            placeholder="password (min 6 chars)" className="border border-slate-300 rounded-xl px-4 py-2.5" />
+          <select value={form.zone_id} onChange={set('zone_id')}
+            className="border border-slate-300 rounded-xl px-4 py-2.5 bg-white">
+            {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+          </select>
+          <div className="sm:col-span-2 flex items-center justify-between gap-3">
+            {note ? <Badge tone="green">{note}</Badge> : <span />}
+            <Button variant="indigo" className="px-6" disabled={busy || !valid}>
+              {busy ? <Spinner /> : '➕ Add operator'}
+            </Button>
+          </div>
+        </form>
+      </Card>
+
+      <Card>
+        <div className="px-6 py-4 border-b border-slate-100 text-lg font-bold text-slate-800">
+          Operators {ops && <span className="text-slate-400 font-medium text-base">· {ops.length}</span>}
+        </div>
+        {!ops ? <Skeleton className="h-40" /> : (
+          <div className="divide-y divide-slate-100">
+            {ops.map((o) => (
+              <div key={o.username} className="px-6 py-4 flex items-center gap-4">
+                <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center">🚦</div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-slate-800 truncate">
+                    {o.display_name} <span className="font-mono text-sm text-slate-400">@{o.username}</span>
+                  </div>
+                  <div className="text-sm text-slate-500">{o.zone_name || o.zone_id}</div>
+                </div>
+                {o.online && <Badge tone="green">signed in</Badge>}
+                <ConfirmDelete label={o.username} onConfirm={() => del(o.username)} />
+              </div>
+            ))}
+            {!ops.length && <div className="px-6 py-8 text-slate-500">No operators yet — add one above.</div>}
+          </div>
+        )}
+      </Card>
+    </div>
+  )
+}
+
+function ConfirmDelete({ label, onConfirm }) {
+  const [armed, setArmed] = useState(false)
+  useEffect(() => { if (!armed) return; const t = setTimeout(() => setArmed(false), 3000); return () => clearTimeout(t) }, [armed])
+  return armed ? (
+    <Button variant="danger" className="px-3 py-1.5 text-sm" onClick={onConfirm} title={`Remove ${label}`}>
+      Confirm
+    </Button>
+  ) : (
+    <button onClick={() => setArmed(true)}
+      className="text-sm text-slate-400 hover:text-rose-600 px-2 py-1.5">remove</button>
   )
 }
 

@@ -56,9 +56,18 @@ SEED_LOTS = {
 
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.row_factory = sqlite3.Row
+    # Performance + concurrency pragmas. WAL lets readers run while a writer holds
+    # the BEGIN IMMEDIATE booking lock (no "database is locked" under load);
+    # synchronous=NORMAL is the safe WAL pairing; busy_timeout makes a contended
+    # writer wait instead of failing instantly. foreign_keys keeps referential
+    # integrity (zone/slot ids).
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA busy_timeout = 10000")
+    conn.execute("PRAGMA temp_store = MEMORY")
     return conn
 
 
@@ -185,13 +194,55 @@ def init_db() -> None:
             offline       INTEGER NOT NULL DEFAULT 0,
             ts            TEXT NOT NULL
         );
+
+        -- Per-lane, per-vehicle pricing (INR rupees). Admin-editable; the citizen
+        -- app fetches this so fares are never hard-coded in the client. Emergency
+        -- vehicles are free and intentionally absent (handled as 0 in code).
+        CREATE TABLE IF NOT EXISTS pricing (
+            slot_type TEXT NOT NULL,        -- 'public' | 'vip'
+            vtype     TEXT NOT NULL,        -- '2w' | 'car' | 'bus'
+            price     INTEGER NOT NULL,     -- rupees
+            PRIMARY KEY(slot_type, vtype)
+        );
+
+        -- Razorpay payment intents. One row per created order; the booking is only
+        -- minted after the matching order is verified + consumed (server-authoritative
+        -- amount, so the client can't tamper the fare). Mock mode (no Razorpay keys)
+        -- uses the same table so the demo flow is identical end-to-end.
+        CREATE TABLE IF NOT EXISTS payments (
+            order_id   TEXT PRIMARY KEY,
+            phone      TEXT,
+            slot_id    TEXT,
+            vtype      TEXT,
+            vcount     INTEGER,
+            slot_type  TEXT,
+            amount     INTEGER,             -- rupees, computed server-side from pricing
+            status     TEXT NOT NULL DEFAULT 'created',  -- created | consumed
+            payment_id TEXT,
+            booking_id TEXT,
+            created_at TEXT NOT NULL
+        );
+
+        -- Live sessions: ONE row per subject (staff username or citizen phone).
+        -- A fresh login overwrites `sid`, so any older token whose sid no longer
+        -- matches is dead = single active session per identity (single-session login).
+        CREATE TABLE IF NOT EXISTS sessions (
+            subject    TEXT PRIMARY KEY,   -- user id or phone
+            role       TEXT NOT NULL,
+            sid        TEXT NOT NULL,      -- opaque session id carried in the token
+            created_at TEXT NOT NULL,
+            last_seen  TEXT
+        );
+
         """
     )
     _migrate(conn)
+    _ensure_indexes(conn)
     conn.commit()
     _seed(conn)
     _seed_lots(conn)
     _seed_users(conn)
+    _seed_pricing(conn)
     conn.close()
 
 
@@ -202,11 +253,41 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for col in ("vdesc", "lot_id", "assigned_lot", "phone", "revoked_by", "updated_at"):
         if col not in have:
             conn.execute(f"ALTER TABLE bookings ADD COLUMN {col} TEXT")
+    if "amount" not in have:
+        conn.execute("ALTER TABLE bookings ADD COLUMN amount INTEGER")  # fare paid (rupees)
     # Backfill updated_at so the first delta sync has a cursor baseline.
     conn.execute("UPDATE bookings SET updated_at=created_at WHERE updated_at IS NULL")
     cp = {r["name"] for r in conn.execute("PRAGMA table_info(checkpoints)").fetchall()}
     if "token" not in cp:
         conn.execute("ALTER TABLE checkpoints ADD COLUMN token TEXT")
+
+
+def _ensure_indexes(conn: sqlite3.Connection) -> None:
+    """Create hot-path indexes AFTER _migrate, so columns added by migration
+    (updated_at, phone, assigned_lot, lot_id, revoked_by) already exist. Idempotent.
+
+    Every booking lookup the API does — by slot, zone+status, phone, code, the
+    delta-sync cursor on updated_at, lot occupancy — was a full table scan before
+    these. At event scale (lakhs of rows) that is the difference between a snappy
+    gate and a stalled one."""
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS ix_bookings_slot      ON bookings(slot_id);
+        CREATE INDEX IF NOT EXISTS ix_bookings_zone_stat ON bookings(zone_id, status);
+        CREATE INDEX IF NOT EXISTS ix_bookings_phone     ON bookings(phone);
+        CREATE INDEX IF NOT EXISTS ix_bookings_code      ON bookings(code);
+        CREATE INDEX IF NOT EXISTS ix_bookings_updated   ON bookings(zone_id, updated_at);
+        CREATE INDEX IF NOT EXISTS ix_bookings_assigned  ON bookings(assigned_lot);
+        CREATE INDEX IF NOT EXISTS ix_bookings_lot       ON bookings(lot_id);
+        CREATE INDEX IF NOT EXISTS ix_bookings_revoked   ON bookings(revoked_by);
+        CREATE INDEX IF NOT EXISTS ix_slots_zone_date    ON slots(zone_id, date, slot_type);
+        CREATE INDEX IF NOT EXISTS ix_lots_zone          ON lots(zone_id, cascade_ord);
+        CREATE INDEX IF NOT EXISTS ix_scan_ts            ON scan_events(ts);
+        CREATE INDEX IF NOT EXISTS ix_scan_booking       ON scan_events(booking_id);
+        CREATE INDEX IF NOT EXISTS ix_assign_booking     ON assignment_events(booking_id);
+        CREATE INDEX IF NOT EXISTS ix_lockdowns_active   ON lockdowns(active, scope);
+        """
+    )
 
 
 def _seed(conn: sqlite3.Connection) -> None:
@@ -277,6 +358,27 @@ def _seed_users(conn: sqlite3.Connection) -> None:
             " VALUES(?,?,?,?,?,?)",
             (username, h, s, role, name, zone),
         )
+    conn.commit()
+
+
+# Default fares (INR). VIP lane is priced as a premium reserved-capacity product
+# (Section 7); admins can change any cell at runtime via /api/admin/pricing.
+SEED_PRICING = {
+    "public": {"2w": 50, "car": 100, "bus": 300},
+    "vip":    {"2w": 200, "car": 500, "bus": 1500},
+}
+
+
+def _seed_pricing(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    if cur.execute("SELECT COUNT(*) FROM pricing").fetchone()[0] > 0:
+        return
+    for slot_type, table in SEED_PRICING.items():
+        for vtype, price in table.items():
+            cur.execute(
+                "INSERT INTO pricing(slot_type,vtype,price) VALUES(?,?,?)",
+                (slot_type, vtype, price),
+            )
     conn.commit()
 
 

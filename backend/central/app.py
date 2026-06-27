@@ -14,8 +14,10 @@ mirroring how FASTag plazas settle after a cut-off cycle rather than per-vehicle
 from __future__ import annotations
 
 import base64
+import hmac
 import io
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -24,12 +26,15 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import hashlib
+
+import httpx
 import qrcode
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Make the shared package importable when run as a script.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -63,9 +68,115 @@ VEHICLE_FOOTPRINT = {"2w": 1, "car": 1, "bus": 1, "emergency": 0}
 # per-slot arrival window is enforced separately at the node (ENFORCE_WINDOW).
 TICKET_EXP_GRACE_HOURS = int(os.environ.get("TICKET_EXP_GRACE_HOURS", "6"))
 
+def _load_dotenv() -> None:
+    """Load KEY=VALUE pairs from a project-root .env into os.environ (no extra dep).
+    Existing env vars win, so an explicit export still overrides the file."""
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
+        if k and k not in os.environ:
+            os.environ[k] = v
+
+
+_load_dotenv()
+
+# Razorpay payment gateway. LIVE when both keys are present (env or .env); otherwise
+# the server runs in MOCK mode — the same order→verify→book flow, but without
+# contacting Razorpay — so the prototype demos end-to-end with no account.
+# Set RAZORPAY_KEY_ID + RAZORPAY_KEY_SECRET to switch to real checkout.
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "").strip()
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "").strip()
+RAZORPAY_LIVE = bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
+RAZORPAY_ORDERS_URL = "https://api.razorpay.com/v1/orders"
+
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")   # zone/slot/lot id shape
+_USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")  # staff usernames (allow dots)
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _valid_date(date: str) -> str:
+    """Reject anything that is not a real YYYY-MM-DD before it reaches SQL. Stops
+    malformed/injected date params and gives a clean 422 instead of an empty page."""
+    if not _DATE_RE.match(date or ""):
+        raise HTTPException(422, "date must be in YYYY-MM-DD form")
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(422, "not a valid calendar date")
+    return date
+
+
+def _valid_id(value: str, label: str) -> str:
+    if not value or not _ID_RE.match(value):
+        raise HTTPException(422, f"invalid {label}")
+    return value
+
+
+def _require_zone(conn, zone_id: str) -> dict:
+    """422 on a bad id shape, 404 when the zone does not exist."""
+    _valid_id(zone_id, "zone id")
+    row = conn.execute("SELECT * FROM zones WHERE id=?", (zone_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "unknown zone")
+    return dict(row)
+
+
+# --------------------------------------------------------------------------- #
+# Pricing + Razorpay payment helpers
+# --------------------------------------------------------------------------- #
+def _price_for(conn, slot_type: str, vtype: str) -> int | None:
+    """Fare in rupees for a lane+vehicle, or None if unpriced. Emergency is free."""
+    if vtype == "emergency":
+        return 0
+    row = conn.execute(
+        "SELECT price FROM pricing WHERE slot_type=? AND vtype=?",
+        (slot_type, vtype),
+    ).fetchone()
+    return row["price"] if row else None
+
+
+def _pricing_table(conn) -> dict:
+    out: dict[str, dict[str, int]] = {"public": {}, "vip": {}}
+    for r in conn.execute("SELECT slot_type,vtype,price FROM pricing"):
+        out.setdefault(r["slot_type"], {})[r["vtype"]] = r["price"]
+    return out
+
+
+def _create_razorpay_order(amount_paise: int, receipt: str, notes: dict) -> str:
+    """Create a real Razorpay order, returning its order_id. Raises on failure."""
+    try:
+        with httpx.Client(timeout=10.0) as cl:
+            resp = cl.post(
+                RAZORPAY_ORDERS_URL,
+                auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
+                json={"amount": amount_paise, "currency": "INR",
+                      "receipt": receipt, "notes": notes, "payment_capture": 1},
+            )
+            resp.raise_for_status()
+            return resp.json()["id"]
+    except (httpx.HTTPError, KeyError, ValueError) as exc:
+        raise HTTPException(502, f"payment gateway error: {exc}") from exc
+
+
+def _verify_razorpay_signature(order_id: str, payment_id: str, signature: str) -> bool:
+    """Razorpay's checkout signature = HMAC-SHA256(order_id|payment_id, key_secret)."""
+    if not (order_id and payment_id and signature):
+        return False
+    body = f"{order_id}|{payment_id}".encode()
+    expected = hmac.new(RAZORPAY_KEY_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
 
 
 def audit(conn, actor: str, action: str, detail: str = "") -> None:
@@ -81,13 +192,57 @@ def _startup() -> None:
     tickets.ensure_plate_secret()
     auth.ensure_secret()
     db.init_db()
+    mode = f"LIVE (key {RAZORPAY_KEY_ID[:12]}…)" if RAZORPAY_LIVE else "MOCK (no keys — set RAZORPAY_KEY_ID/SECRET)"
+    print(f"[payments] Razorpay mode: {mode}", file=sys.stderr)
+
+
+# --------------------------------------------------------------------------- #
+# Sessions — SINGLE active session per identity.
+#
+# Tokens stay stateless-signed, but each carries an opaque `sid`. The latest login
+# for a subject overwrites the `sid` stored in the sessions table, so any earlier
+# token (whose sid no longer matches) is instantly dead — one device/tab at a time
+# per username and per citizen phone. Logout deletes the row, killing the token.
+# --------------------------------------------------------------------------- #
+def _open_session(conn, subject: str, role: str) -> str:
+    """Mint a new session id for `subject`, evicting any previous one. Returns sid."""
+    sid = uuid.uuid4().hex
+    ts = now_iso()
+    conn.execute(
+        "INSERT INTO sessions(subject,role,sid,created_at,last_seen) VALUES(?,?,?,?,?)"
+        " ON CONFLICT(subject) DO UPDATE SET sid=excluded.sid, role=excluded.role,"
+        " created_at=excluded.created_at, last_seen=excluded.last_seen",
+        (subject, role, sid, ts, ts),
+    )
+    return sid
+
+
+def _session_live(subject: str, sid: str) -> bool:
+    if not subject or not sid:
+        return False
+    conn = db.connect()
+    try:
+        row = conn.execute(
+            "SELECT sid FROM sessions WHERE subject=?", (subject,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return bool(row) and hmac.compare_digest(row["sid"], sid)
 
 
 # --------------------------------------------------------------------------- #
 # Auth dependencies (role-bound bearer tokens). See docs/AUDIT.md §4 move 1.
 # --------------------------------------------------------------------------- #
 def _principal(authorization: str | None):
-    return auth.verify_token(auth.bearer(authorization))
+    """Verify the bearer token's signature/expiry AND that its session is still the
+    live one for the subject (single-session). A superseded or logged-out token
+    verifies cryptographically but fails the session check → treated as anonymous."""
+    payload = auth.verify_token(auth.bearer(authorization))
+    if not payload:
+        return None
+    if not _session_live(payload.get("sub"), payload.get("sid")):
+        return None
+    return payload
 
 
 def staff_dep(authorization: str | None = Header(None)) -> dict:
@@ -135,22 +290,40 @@ def _authenticate(conn, username: str, password: str) -> dict | None:
 # Auth endpoints
 # --------------------------------------------------------------------------- #
 class LoginReq(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
 
 
 @app.post("/api/auth/login")
 def login(req: LoginReq):
-    """Staff login (commander / dispatcher / operator)."""
+    """Staff login (commander / dispatcher / operator). Single-session: this login
+    supersedes any previous one for the same username (older token goes dead)."""
     conn = db.connect()
-    u = _authenticate(conn, req.username.strip().lower(), req.password)
-    conn.close()
-    if not u:
-        raise HTTPException(401, "invalid credentials")
-    token = auth.make_token({"sub": u["id"], "role": u["role"],
+    try:
+        u = _authenticate(conn, req.username.strip().lower(), req.password)
+        if not u:
+            raise HTTPException(401, "invalid credentials")
+        sid = _open_session(conn, u["id"], u["role"])
+        conn.commit()
+    finally:
+        conn.close()
+    token = auth.make_token({"sub": u["id"], "role": u["role"], "sid": sid,
                              "name": u["display_name"], "zone": u["zone_id"]})
     return {"token": token, "role": u["role"], "name": u["display_name"],
             "zone": u["zone_id"]}
+
+
+@app.post("/api/auth/logout")
+def logout(authorization: str | None = Header(None)):
+    """End the current session (deletes the row → the token is immediately dead)."""
+    p = _principal(authorization)
+    if not p:
+        raise HTTPException(401, "not authenticated")
+    conn = db.connect()
+    conn.execute("DELETE FROM sessions WHERE subject=?", (p["sub"],))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
 
 
 def _norm_phone(phone: str) -> str:
@@ -159,7 +332,7 @@ def _norm_phone(phone: str) -> str:
 
 
 class OtpReq(BaseModel):
-    phone: str
+    phone: str = Field(min_length=5, max_length=20)
 
 
 @app.post("/api/auth/otp/request")
@@ -185,8 +358,15 @@ def otp_request(req: OtpReq):
 
 
 class OtpVerify(BaseModel):
-    phone: str
-    code: str
+    phone: str = Field(min_length=5, max_length=20)
+    code: str = Field(min_length=4, max_length=8)
+
+    @field_validator("code")
+    @classmethod
+    def _digits(cls, v: str) -> str:
+        if not v.strip().isdigit():
+            raise ValueError("OTP must be numeric")
+        return v.strip()
 
 
 @app.post("/api/auth/otp/verify")
@@ -207,9 +387,13 @@ def otp_verify(req: OtpVerify):
         conn.close()
         raise HTTPException(401, "incorrect or expired OTP")
     conn.execute("DELETE FROM otp_codes WHERE phone=?", (phone,))
+    # Single-session for citizens too: a fresh verify on a new phone/device kills
+    # the old token, so a leaked pass-list token can't outlive a re-login.
+    sid = _open_session(conn, phone, "citizen")
     conn.commit()
     conn.close()
-    token = auth.make_token({"sub": phone, "role": "citizen"}, ttl_seconds=72 * 3600)
+    token = auth.make_token({"sub": phone, "role": "citizen", "sid": sid},
+                            ttl_seconds=72 * 3600)
     return {"token": token, "phone": phone}
 
 
@@ -274,6 +458,7 @@ def _active_lockdown_scope(conn, zone_id: str) -> str | None:
 
 @app.get("/api/zones")
 def list_zones(date: str):
+    _valid_date(date)
     conn = db.connect()
     out = []
     for z in conn.execute("SELECT * FROM zones ORDER BY id").fetchall():
@@ -302,7 +487,11 @@ def list_zones(date: str):
 
 @app.get("/api/zones/{zone_id}/slots")
 def zone_slots(zone_id: str, date: str, slot_type: str = "public"):
+    _valid_date(date)
+    if slot_type not in ("public", "vip"):
+        raise HTTPException(422, "slot_type must be 'public' or 'vip'")
     conn = db.connect()
+    _require_zone(conn, zone_id)
     rows = conn.execute(
         "SELECT * FROM slots WHERE zone_id=? AND date=? AND slot_type=?"
         " ORDER BY start",
@@ -329,6 +518,7 @@ def zone_lots_public(zone_id: str):
     (docs/AUDIT.md C1). Citizens SEE the lots they'll be directed to; the exact lot
     is assigned at the gate (overflow cascade), so this is informational, not a
     seat-pick. `primary` is the lot a new booking is tagged to."""
+    _valid_id(zone_id, "zone id")
     conn = db.connect()
     lots = _zone_lots(conn, zone_id)
     if not lots:
@@ -349,13 +539,111 @@ def zone_lots_public(zone_id: str):
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Pricing — admin sets per-lane / per-vehicle fares; citizens fetch them live.
+# --------------------------------------------------------------------------- #
+@app.get("/api/pricing")
+def get_pricing():
+    """Public fare card. The citizen app reads this so prices are never hard-coded
+    in the client and a fare change takes effect immediately on the next load."""
+    conn = db.connect()
+    table = _pricing_table(conn)
+    conn.close()
+    return {"currency": "INR", "pricing": table}
+
+
+class PriceItem(BaseModel):
+    slot_type: str = Field(pattern="^(public|vip)$")
+    vtype: str = Field(pattern="^(2w|car|bus)$")
+    price: int = Field(ge=0, le=1_000_000)
+
+
+class PricingReq(BaseModel):
+    items: list[PriceItem] = Field(min_length=1, max_length=12)
+
+
+@app.post("/api/admin/pricing")
+def set_pricing(req: PricingReq, commander: dict = Depends(commander_dep)):
+    """Set one or more fares (lane × vehicle). Upserts each cell."""
+    conn = db.connect()
+    for it in req.items:
+        conn.execute(
+            "INSERT INTO pricing(slot_type,vtype,price) VALUES(?,?,?)"
+            " ON CONFLICT(slot_type,vtype) DO UPDATE SET price=excluded.price",
+            (it.slot_type, it.vtype, it.price),
+        )
+    audit(conn, commander["name"], "pricing.set",
+          ", ".join(f"{i.slot_type}/{i.vtype}=₹{i.price}" for i in req.items))
+    conn.commit()
+    table = _pricing_table(conn)
+    conn.close()
+    return {"ok": True, "pricing": table}
+
+
+# --------------------------------------------------------------------------- #
+# Payments — create a Razorpay order (real or mock). The booking is minted only
+# after this order is verified at /api/bookings (server-authoritative amount).
+# --------------------------------------------------------------------------- #
+class OrderReq(BaseModel):
+    slot_id: str = Field(min_length=1, max_length=128)
+    vtype: str = Field(pattern="^(2w|car|bus)$")     # emergency is free, no order
+    vcount: int = Field(default=1, ge=1, le=50)
+    slot_type: str = Field(default="public", pattern="^(public|vip)$")
+
+
+@app.post("/api/payments/order")
+def create_order(req: OrderReq, principal: dict = Depends(citizen_dep)):
+    """Compute the fare server-side, open a Razorpay order, and stash a pending
+    payment row. Returns what the checkout widget needs. In mock mode (no keys) the
+    order_id is synthetic and `mock` is true so the client skips real checkout."""
+    phone = principal["sub"]
+    conn = db.connect()
+    slot = conn.execute("SELECT * FROM slots WHERE id=?", (req.slot_id,)).fetchone()
+    if not slot:
+        conn.close()
+        raise HTTPException(404, "unknown slot")
+    if slot["slot_type"] != req.slot_type:
+        conn.close()
+        raise HTTPException(400, "slot_type mismatch")
+    unit = _price_for(conn, req.slot_type, req.vtype)
+    if unit is None:
+        conn.close()
+        raise HTTPException(400, "no price configured for this lane/vehicle")
+    amount = unit * req.vcount
+    receipt = f"vms-{uuid.uuid4().hex[:12]}"
+    if RAZORPAY_LIVE:
+        order_id = _create_razorpay_order(
+            amount * 100, receipt,
+            {"phone": phone, "slot": req.slot_id, "lane": req.slot_type})
+    else:
+        order_id = f"order_mock_{uuid.uuid4().hex}"
+    conn.execute(
+        "INSERT INTO payments(order_id,phone,slot_id,vtype,vcount,slot_type,amount,"
+        "status,created_at) VALUES(?,?,?,?,?,?,?, 'created', ?)",
+        (order_id, phone, req.slot_id, req.vtype, req.vcount, req.slot_type,
+         amount, now_iso()),
+    )
+    conn.commit()
+    conn.close()
+    return {
+        "order_id": order_id, "amount": amount, "amount_paise": amount * 100,
+        "currency": "INR", "key_id": RAZORPAY_KEY_ID, "mock": not RAZORPAY_LIVE,
+        "name": "Ujjain VMS", "description": f"{req.slot_type.upper()} entry · {req.vtype}",
+    }
+
+
 class BookingReq(BaseModel):
-    slot_id: str
+    slot_id: str = Field(min_length=1, max_length=128)
     vtype: str = Field(pattern="^(2w|car|bus|emergency)$")
     vcount: int = Field(default=1, ge=1, le=50)
-    plate: str | None = None
-    vdesc: str | None = None          # free text: colour / model, aids gate verification
+    plate: str | None = Field(default=None, max_length=20)
+    vdesc: str | None = Field(default=None, max_length=60)  # colour/model, aids gate check
     slot_type: str = Field(default="public", pattern="^(public|vip)$")
+    # Razorpay proof — required for paid (non-emergency) bookings. The order_id ties
+    # back to the server-computed amount; signature is checked in LIVE mode.
+    razorpay_order_id: str | None = Field(default=None, max_length=64)
+    razorpay_payment_id: str | None = Field(default=None, max_length=64)
+    razorpay_signature: str | None = Field(default=None, max_length=256)
 
 
 def _qr_data_url(token: str) -> str:
@@ -380,6 +668,10 @@ def create_booking(req: BookingReq, authorization: str | None = Header(None)):
         if not principal or principal.get("role") != "citizen":
             raise HTTPException(401, "verify your phone number to book")
         phone = principal["sub"]
+        # Paid lane: a verified Razorpay order must back the booking (anti-tamper —
+        # the amount lives on the server order, not the request).
+        if not req.razorpay_order_id:
+            raise HTTPException(402, "payment required — create an order first")
 
     # Autocommit mode so we can hold an explicit BEGIN IMMEDIATE around the
     # read-check-insert. BEGIN IMMEDIATE takes SQLite's reserved write lock up
@@ -448,17 +740,44 @@ def create_booking(req: BookingReq, authorization: str | None = Header(None)):
                     _zone_active_count(conn, slot["zone_id"], slot["date"]) + footprint
                     > round(phys * OVERBOOK_RATIO)):
                 raise HTTPException(409, "zone parking sold out for this date")
+            # Payment: consume the matching pending order inside the same lock, so a
+            # single paid order yields exactly one booking. Emergency is free.
+            amount = 0
+            if req.vtype != "emergency":
+                pay = conn.execute(
+                    "SELECT * FROM payments WHERE order_id=?",
+                    (req.razorpay_order_id,)).fetchone()
+                if not pay:
+                    raise HTTPException(400, "unknown payment order")
+                if pay["status"] != "created":
+                    raise HTTPException(409, "payment already used")
+                if pay["phone"] != phone:
+                    raise HTTPException(403, "payment belongs to another user")
+                if (pay["slot_id"] != slot["id"] or pay["vtype"] != req.vtype
+                        or pay["vcount"] != req.vcount
+                        or pay["slot_type"] != req.slot_type):
+                    raise HTTPException(400, "payment does not match this booking")
+                if RAZORPAY_LIVE and not _verify_razorpay_signature(
+                        req.razorpay_order_id, req.razorpay_payment_id,
+                        req.razorpay_signature):
+                    raise HTTPException(400, "payment signature verification failed")
+                amount = pay["amount"]
+                conn.execute(
+                    "UPDATE payments SET status='consumed', payment_id=?, booking_id=?"
+                    " WHERE order_id=?",
+                    (req.razorpay_payment_id, bid, req.razorpay_order_id),
+                )
             ts = now_iso()
             conn.execute(
                 "INSERT INTO bookings(id,slot_id,zone_id,vtype,vcount,plate,vdesc,"
-                "lot_id,phone,status,code,token,slot_type,created_at,updated_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?, 'booked', ?,?,?,?,?)",
+                "lot_id,phone,status,code,token,slot_type,amount,created_at,updated_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?, 'booked', ?,?,?,?,?,?)",
                 (bid, slot["id"], slot["zone_id"], req.vtype, req.vcount, plate, vdesc,
-                 lot_id, phone, code, token, req.slot_type, ts, ts),
+                 lot_id, phone, code, token, req.slot_type, amount, ts, ts),
             )
             actor = phone or (principal.get("name") if principal else "citizen")
             audit(conn, actor, "booking.create",
-                  f"{bid} {slot['zone_id']} {slot['start']} {req.vtype}")
+                  f"{bid} {slot['zone_id']} {slot['start']} {req.vtype} ₹{amount}")
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
@@ -478,7 +797,7 @@ def create_booking(req: BookingReq, authorization: str | None = Header(None)):
         "id": bid, "code": code, "token": token, "qr": qr,
         "zone": slot["zone_id"], "date": slot["date"], "window": window,
         "vtype": req.vtype, "vcount": req.vcount, "slot_type": req.slot_type,
-        "plate": plate, "vdesc": vdesc,
+        "plate": plate, "vdesc": vdesc, "amount": amount,
         "lot_id": lot_id, "lot_name": lot_name,
         "lot_lat": lot_lat, "lot_lng": lot_lng, "sms": sms,
     }
@@ -554,7 +873,7 @@ def my_bookings(principal: dict = Depends(citizen_dep)):
             "window": f"{b['ws']}–{b['we']}", "vtype": b["vtype"],
             "vcount": b["vcount"], "slot_type": b["slot_type"], "status": b["status"],
             "plate": b["plate"], "vdesc": b["vdesc"], "lot_name": b["lot_name"],
-            "lot_lat": b["llat"], "lot_lng": b["llng"],
+            "lot_lat": b["llat"], "lot_lng": b["llng"], "amount": b["amount"],
         })
     return out
 
@@ -564,6 +883,7 @@ def my_bookings(principal: dict = Depends(citizen_dep)):
 # --------------------------------------------------------------------------- #
 @app.get("/api/admin/overview")
 def admin_overview(date: str, principal: dict = Depends(staff_dep)):
+    _valid_date(date)
     conn = db.connect()
     zones = []
     for z in conn.execute("SELECT * FROM zones ORDER BY id").fetchall():
@@ -601,8 +921,8 @@ def admin_overview(date: str, principal: dict = Depends(staff_dep)):
 
 
 class LockdownReq(BaseModel):
-    scope: str  # zone id or 'ALL'
-    reason: str = ""
+    scope: str = Field(min_length=1, max_length=64)  # zone id or 'ALL'
+    reason: str = Field(default="", max_length=280)
 
 
 def _scope_where(scope: str) -> tuple[str, tuple]:
@@ -617,6 +937,8 @@ def set_lockdown(req: LockdownReq, commander: dict = Depends(commander_dep)):
     """ACTIVATE is single-commander and fast — slamming the brakes on is the safe
     direction (Mauni Amavasya). LIFTING needs two people (see /lift)."""
     conn = db.connect()
+    if req.scope != "ALL":
+        _require_zone(conn, req.scope)   # 'ALL' or a real zone — nothing else
     conn.execute(
         "UPDATE lockdowns SET active=0 WHERE scope=? AND active=1", (req.scope,)
     )
@@ -683,8 +1005,8 @@ def lift_lockdown(scope: str, req: LiftReq,
 
 
 class CapacityReq(BaseModel):
-    zone_id: str
-    date: str
+    zone_id: str = Field(min_length=1, max_length=64)
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     capacity: int = Field(ge=0, le=100000)
     slot_type: str = Field(default="public", pattern="^(public|vip)$")
 
@@ -692,7 +1014,9 @@ class CapacityReq(BaseModel):
 @app.post("/api/admin/capacity")
 def set_capacity(req: CapacityReq, commander: dict = Depends(commander_dep)):
     """Capacity planner (Section 9.1): set every slot's capacity for a zone/date."""
+    _valid_date(req.date)
     conn = db.connect()
+    _require_zone(conn, req.zone_id)
     cur = conn.execute(
         "UPDATE slots SET capacity=? WHERE zone_id=? AND date=? AND slot_type=?",
         (req.capacity, req.zone_id, req.date, req.slot_type),
@@ -707,8 +1031,18 @@ def set_capacity(req: CapacityReq, commander: dict = Depends(commander_dep)):
 
 
 class ReconcileReq(BaseModel):
-    date: str
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     as_of: str | None = None   # reconcile windows that ended before this instant
+
+    @field_validator("as_of")
+    @classmethod
+    def _iso(cls, v: str | None) -> str | None:
+        if v:
+            try:
+                datetime.fromisoformat(v)
+            except ValueError as exc:
+                raise ValueError("as_of must be ISO-8601") from exc
+        return v
 
 
 @app.post("/api/admin/reconcile")
@@ -738,6 +1072,7 @@ def admin_lots(zone_id: str, principal: dict = Depends(staff_dep)):
     """Per-lot physical occupancy for a zone, reconciled from synced assignment
     events (bookings.assigned_lot). Shows overflow visibly at the command centre."""
     conn = db.connect()
+    _require_zone(conn, zone_id)
     out = []
     for lot in _zone_lots(conn, zone_id):
         used = conn.execute(
@@ -762,6 +1097,7 @@ def get_audit(limit: int = 80, principal: dict = Depends(staff_dep)):
     offline flag and the vehicle/zone they relate to, so the command centre can see
     *what* a gate did and *whether it was offline at the time* — the part that was
     previously invisible. Newest first."""
+    limit = max(1, min(limit, 500))      # bound the fan-out / response size
     conn = db.connect()
     admin_rows = conn.execute(
         "SELECT id, ts, actor, action, detail FROM audit_log"
@@ -808,6 +1144,78 @@ def get_audit(limit: int = 80, principal: dict = Depends(staff_dep)):
 
     feed.sort(key=lambda x: x["ts"], reverse=True)
     return feed[:limit]
+
+
+# --------------------------------------------------------------------------- #
+# Gate-operator account management (commander adds/removes operators)
+# --------------------------------------------------------------------------- #
+@app.get("/api/admin/operators")
+def list_operators(principal: dict = Depends(staff_dep)):
+    """All gate-operator accounts with their bound zone. Staff-visible."""
+    conn = db.connect()
+    rows = conn.execute(
+        "SELECT u.id, u.display_name, u.zone_id, z.name AS zone_name,"
+        " (s.subject IS NOT NULL) AS online"
+        " FROM users u LEFT JOIN zones z ON z.id=u.zone_id"
+        " LEFT JOIN sessions s ON s.subject=u.id"
+        " WHERE u.role='operator' ORDER BY u.zone_id, u.id",
+    ).fetchall()
+    conn.close()
+    return [{"username": r["id"], "display_name": r["display_name"],
+             "zone_id": r["zone_id"], "zone_name": r["zone_name"],
+             "online": bool(r["online"])} for r in rows]
+
+
+class OperatorReq(BaseModel):
+    username: str = Field(min_length=3, max_length=64)
+    password: str = Field(min_length=6, max_length=256)
+    display_name: str = Field(min_length=1, max_length=80)
+    zone_id: str = Field(min_length=1, max_length=64)
+
+
+@app.post("/api/admin/operators")
+def add_operator(req: OperatorReq, commander: dict = Depends(commander_dep)):
+    """Create a gate-operator login bound to a zone. Commander-only."""
+    username = req.username.strip().lower()
+    if not _USERNAME_RE.match(username):
+        raise HTTPException(422, "username: letters/digits/._- only, min 3 chars")
+    conn = db.connect()
+    _require_zone(conn, req.zone_id)
+    if conn.execute("SELECT 1 FROM users WHERE id=?", (username,)).fetchone():
+        conn.close()
+        raise HTTPException(409, "username already exists")
+    h, s = auth.hash_password(req.password)
+    conn.execute(
+        "INSERT INTO users(id,pw_hash,pw_salt,role,display_name,zone_id)"
+        " VALUES(?,?,?, 'operator', ?,?)",
+        (username, h, s, req.display_name.strip(), req.zone_id),
+    )
+    audit(conn, commander["name"], "operator.add",
+          f"{username} → {req.zone_id} ({req.display_name.strip()})")
+    conn.commit()
+    conn.close()
+    return {"ok": True, "username": username, "zone_id": req.zone_id,
+            "display_name": req.display_name.strip()}
+
+
+@app.delete("/api/admin/operators/{username}")
+def remove_operator(username: str, commander: dict = Depends(commander_dep)):
+    """Delete a gate-operator account and kill any live session it holds."""
+    username = username.strip().lower()
+    conn = db.connect()
+    u = conn.execute("SELECT role FROM users WHERE id=?", (username,)).fetchone()
+    if not u:
+        conn.close()
+        raise HTTPException(404, "unknown operator")
+    if u["role"] != "operator":
+        conn.close()
+        raise HTTPException(403, "only operator accounts can be removed here")
+    conn.execute("DELETE FROM users WHERE id=?", (username,))
+    conn.execute("DELETE FROM sessions WHERE subject=?", (username,))
+    audit(conn, commander["name"], "operator.remove", username)
+    conn.commit()
+    conn.close()
+    return {"ok": True, "removed": username}
 
 
 # --------------------------------------------------------------------------- #
@@ -936,6 +1344,7 @@ def admin_parking(date: str, principal: dict = Depends(staff_dep)):
     its actual occupants (arrived vehicles — split into parked-as-booked vs moved
     here) and its reservations (booked, not yet arrived), so the UI can render a
     seat-grid coloured by state. Date-scoped via the slot."""
+    _valid_date(date)
     conn = db.connect()
     zones_out = []
     for z in conn.execute("SELECT * FROM zones ORDER BY id").fetchall():

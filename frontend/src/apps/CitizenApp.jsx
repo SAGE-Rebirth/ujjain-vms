@@ -2,24 +2,37 @@ import React, { useEffect, useState } from 'react'
 import {
   listZones, zoneSlots, zoneLots, createBooking, getBooking, loadPasses, savePass, removePass,
   loadHidden, hidePass, cancelBooking, otpRequest, otpVerify, myBookings,
-  getCitizen, setCitizen, clearCitizen,
+  getCitizen, setCitizen, logoutCitizen,
+  getPricing, createOrder, razorpayCheckout,
 } from '../api.js'
 import {
   Button, Card, Badge, FillBar, Stepper, Spinner, Skeleton, Empty,
   VEHICLES, vehicleIcon,
 } from '../ui/components.jsx'
 
-const FEE = { '2w': 50, car: 100, bus: 300 }
 const STEPS = ['Zone', 'Time', 'Parking', 'Vehicle', 'Pay']
 
 export default function CitizenApp({ date, section, setSection }) {
   const [resetKey, setResetKey] = useState(0)
   const [citizen, setCit] = useState(getCitizen())
+  const [expired, setExpired] = useState(false)
   // Start the wizard fresh each time the user navigates to "Book".
   useEffect(() => { if (section === 'book') setResetKey((n) => n + 1) }, [section])
 
-  const onLogin = (c) => { setCitizen(c); setCit(c) }
-  const onLogout = () => { clearCitizen(); setCit(null) }
+  // Single-session: verifying the same number on another device (or signing out)
+  // kills this token. `auth:expired` fires on the next 401 → drop to the OTP login
+  // with a notice instead of looping on failed pass/booking calls.
+  useEffect(() => {
+    const onExpired = (e) => {
+      if (e.detail?.scope !== 'citizen') return
+      setCit(null); setExpired(true)
+    }
+    window.addEventListener('auth:expired', onExpired)
+    return () => window.removeEventListener('auth:expired', onExpired)
+  }, [])
+
+  const onLogin = (c) => { setCitizen(c); setCit(c); setExpired(false) }
+  const onLogout = async () => { await logoutCitizen(); setCit(null) }
 
   // Booking + passes are identity-bound (anti-tout, C13). Gate them behind a
   // phone-OTP login; Home stays public so live availability is browsable.
@@ -34,7 +47,7 @@ export default function CitizenApp({ date, section, setSection }) {
         </div>
       )}
       {section === 'home' && <Home date={date} onBook={() => setSection('book')} onPasses={() => setSection('passes')} />}
-      {needsLogin && <CitizenLogin onLogin={onLogin} />}
+      {needsLogin && <CitizenLogin onLogin={onLogin} expired={expired} />}
       {section === 'book' && citizen && <BookWizard key={resetKey} date={date} onDone={() => setSection('passes')} />}
       {section === 'passes' && citizen && <Passes onBook={() => setSection('book')} />}
     </div>
@@ -43,7 +56,7 @@ export default function CitizenApp({ date, section, setSection }) {
 
 // Phone → OTP login. The OTP is the anti-tout identity anchor (per-phone booking
 // caps) and the key for server-side pass retrieval (docs/AUDIT.md C10, C13).
-function CitizenLogin({ onLogin }) {
+function CitizenLogin({ onLogin, expired }) {
   const [phone, setPhone] = useState(''); const [code, setCode] = useState('')
   const [sent, setSent] = useState(null) // {demo_otp}
   const [busy, setBusy] = useState(false); const [err, setErr] = useState('')
@@ -68,6 +81,11 @@ function CitizenLogin({ onLogin }) {
         </p>
       </div>
       <Card className="p-6 space-y-3">
+        {expired && !err && (
+          <div role="status" className="bg-amber-100 text-amber-800 rounded-xl p-3 text-sm">
+            Session ended — this number was verified on another device, or signed out. Verify again to continue.
+          </div>
+        )}
         {err && <div role="alert" className="bg-rose-100 text-rose-700 rounded-xl p-3 text-sm">{err}</div>}
         <div className="flex gap-2">
           <span className="inline-flex items-center px-3 rounded-xl bg-slate-100 text-slate-500 text-sm">+91</span>
@@ -170,8 +188,11 @@ function BookWizard({ date, onDone }) {
   const [paying, setPaying] = useState(false)
   const [ticket, setTicket] = useState(null)
   const [err, setErr] = useState('')
+  const [pricing, setPricing] = useState(null)   // {public:{2w,car,bus}, vip:{…}}
 
   useEffect(() => { listZones(date).then(setZones).catch((e) => setErr(e.message)) }, [date])
+  // Fares are fetched live (admin-editable) — never hard-coded in the client.
+  useEffect(() => { getPricing().then((r) => setPricing(r.pricing)).catch(() => setPricing(null)) }, [])
   const loadSlots = (z, type) => zoneSlots(z.id, date, type).then(setSlots).catch((e) => setErr(e.message))
   const chooseZone = (z) => { setZone(z); loadSlots(z, slotType); setStep(1) }
   const chooseType = (t) => { setSlotType(t); setSlot(null); if (zone) loadSlots(zone, t) }
@@ -179,20 +200,25 @@ function BookWizard({ date, onDone }) {
     setSlot(s); setStep(2)
     setLots(null); zoneLots(zone.id).then(setLots).catch(() => setLots([]))
   }
-  const fee = (FEE[vtype] || 100) * vcount
+  const unitFee = pricing?.[slotType]?.[vtype]
+  const fee = (unitFee ?? 0) * vcount
 
   const pay = async () => {
     setErr(''); setPaying(true)
     try {
-      await new Promise((r) => setTimeout(r, 900))
+      // 1) open a server-priced Razorpay order, 2) pay (real checkout, or mock in
+      // demo mode), 3) mint the booking with the verified payment proof.
+      const order = await createOrder({ slot_id: slot.id, vtype, vcount, slot_type: slotType })
+      const proof = order.mock
+        ? { razorpay_order_id: order.order_id, razorpay_payment_id: 'pay_mock', razorpay_signature: 'mock' }
+        : await razorpayCheckout(order, { phone: getCitizen()?.phone })
       const t = await createBooking({
-        slot_id: slot.id, vtype, vcount, slot_type: slotType,
-        plate, vdesc,
+        slot_id: slot.id, vtype, vcount, slot_type: slotType, plate, vdesc, ...proof,
       })
       const pass = {
         id: t.id, code: t.code, token: t.token, qr: t.qr, sms: t.sms,
         zoneName: zone.name, road: zone.road, date: t.date, window: t.window,
-        vtype, vcount, slot_type: t.slot_type, paid: fee,
+        vtype, vcount, slot_type: t.slot_type, paid: t.amount ?? fee,
         plate: t.plate, vdesc: t.vdesc, lotName: t.lot_name,
         lotLat: t.lot_lat, lotLng: t.lot_lng,
       }
@@ -295,14 +321,20 @@ function BookWizard({ date, onDone }) {
             <BackLink onClick={() => setStep(2)} label="Parking" />
             <h2 className="text-xl font-bold text-slate-800">Vehicle</h2>
             <div className="grid grid-cols-3 gap-3">
-              {VEHICLES.map((v) => (
-                <button key={v.id} onClick={() => setVtype(v.id)}
-                  className={`rounded-xl border p-5 flex flex-col items-center gap-2 transition
-                    ${vtype === v.id ? 'border-orange-400 bg-orange-50 shadow-sm' : 'bg-white hover:border-slate-300'}`}>
-                  <span className="text-3xl">{v.icon}</span>
-                  <span className="text-sm font-medium text-slate-600">{v.label}</span>
-                </button>
-              ))}
+              {VEHICLES.map((v) => {
+                const price = pricing?.[slotType]?.[v.id]
+                return (
+                  <button key={v.id} onClick={() => setVtype(v.id)}
+                    className={`rounded-xl border p-5 flex flex-col items-center gap-1.5 transition
+                      ${vtype === v.id ? 'border-orange-400 bg-orange-50 shadow-sm' : 'bg-white hover:border-slate-300'}`}>
+                    <span className="text-3xl">{v.icon}</span>
+                    <span className="text-sm font-medium text-slate-600">{v.label}</span>
+                    <span className="text-xs font-semibold text-indigo-700 tabular-nums">
+                      {price != null ? `₹${price}` : '—'}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
             <div className="flex items-center justify-between bg-white border border-slate-200 rounded-xl p-4">
               <span className="text-base text-slate-700">How many vehicles?</span>
@@ -358,10 +390,12 @@ function BookWizard({ date, onDone }) {
                 <span>Amount</span><span className="tabular-nums">₹{fee}</span>
               </div>
             </Card>
-            <Button className="w-full py-4 text-base" onClick={pay} disabled={paying}>
-              {paying ? <><Spinner /> Processing UPI…</> : `Pay ₹${fee} via UPI (mock)`}
+            <Button className="w-full py-4 text-base" onClick={pay} disabled={paying || fee <= 0}>
+              {paying ? <><Spinner /> Processing payment…</> : `Pay ₹${fee} securely`}
             </Button>
-            <p className="text-sm text-center text-slate-500">Mock payment — no real money is charged.</p>
+            <p className="text-sm text-center text-slate-500">
+              🔒 Payments processed by Razorpay (test mode in this demo).
+            </p>
           </div>
         )}
       </div>

@@ -4,6 +4,7 @@ import {
   getCheckpointBase, setCheckpointBase,
 } from '../api.js'
 import { Card, Badge, Button, Switch, Spinner, FillBar, staleness, vehicleIcon } from '../ui/components.jsx'
+import QrScanner from '../ui/QrScanner.jsx'
 
 export default function OperatorApp({ section }) {
   const [status, setStatus] = useState(null)
@@ -18,6 +19,7 @@ export default function OperatorApp({ section }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [base, setBase] = useState(getCheckpointBase())
+  const [scanning, setScanning] = useState(false)   // camera QR scanner on/off
 
   const refresh = () => {
     cpStatus().then((s) => { setStatus(s); setReachable(true) }).catch(() => setReachable(false))
@@ -41,6 +43,9 @@ export default function OperatorApp({ section }) {
       if (r.decision === 'admit') { setToken(''); setCode(''); setObserved('') }
     } catch (e) { setErr(e.message) } finally { setBusy(false); refresh() }
   }
+  // Camera decoded a QR → feed the token in and verify immediately, no typing.
+  // Any observed plate already entered is included so binding is still checked.
+  const onScan = (text) => { setToken(text); verify({ token: text }) }
   const guard = (fn) => async () => { if (!status) return; setErr(''); try { await fn(); refresh() } catch (e) { setErr(e.message) } }
   const registerExit = async () => {
     setErr(''); setResult(null); setBusy(true)
@@ -192,6 +197,24 @@ ZONE_ID=indore CHECKPOINT_ID=cp-indore CENTRAL_URL=http://127.0.0.1:8000 \
             )}
 
             <Card className="p-6">
+              {/* Camera QR scan — point the pass at the lens; it auto-feeds the
+                  token and verifies offline-capably, no typing. */}
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <div className="text-base font-semibold text-slate-800">📷 Scan QR with camera</div>
+                  <div className="text-sm text-slate-500">Auto-reads &amp; verifies — hands-free at the gate.</div>
+                </div>
+                <Switch on={scanning} onClick={() => setScanning((s) => !s)} onLabel="CAM ON" offLabel="CAM OFF" />
+              </div>
+              {scanning && (
+                <div className="mb-5">
+                  <QrScanner onDetect={onScan} paused={busy} />
+                  <p className="text-xs text-slate-400 mt-2">
+                    Enter the observed plate below first if you want the gate to check vehicle binding on the auto-scan.
+                  </p>
+                </div>
+              )}
+
               <label htmlFor="obs" className="text-sm font-medium text-slate-600">
                 Observed number plate <span className="text-slate-400">(checked against the pass)</span>
               </label>
@@ -200,7 +223,7 @@ ZONE_ID=indore CHECKPOINT_ID=cp-indore CENTRAL_URL=http://127.0.0.1:8000 \
                 className="w-full mt-2 mb-5 border border-slate-300 rounded-xl px-4 py-3 text-base
                   font-mono tracking-[0.15em] uppercase" />
 
-              <label htmlFor="tok" className="text-sm font-medium text-slate-600">Scanner input — paste QR token</label>
+              <label htmlFor="tok" className="text-sm font-medium text-slate-600">Or paste QR token (manual fallback)</label>
               <textarea id="tok" rows={2} value={token} onChange={(e) => setToken(e.target.value)}
                 placeholder="base64url ticket token from the QR…"
                 className="w-full mt-2 border border-slate-300 rounded-xl p-3 text-sm font-mono" />
