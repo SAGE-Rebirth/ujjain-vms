@@ -79,6 +79,9 @@ export const zoneSlots = (zone, date, type = 'public') =>
 export const zoneLots = (zone) => j(`${CENTRAL}/api/zones/${zone}/lots`)
 export const createBooking = (body) =>
   jScope('citizen', `${CENTRAL}/api/bookings`, { method: 'POST', body: JSON.stringify(body) })
+// Mint one per-vehicle pass for each item in a paid multi-vehicle order.
+export const createBookingsBatch = (body) =>
+  jScope('citizen', `${CENTRAL}/api/bookings/batch`, { method: 'POST', body: JSON.stringify(body) })
 export const getBooking = (id) => j(`${CENTRAL}/api/bookings/${id}`)
 
 // ── Pricing (public read) + payments ───────────────────────────────────────

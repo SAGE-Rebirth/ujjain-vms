@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import hmac
 import io
+import json
 import os
 import re
 import socket
@@ -45,7 +46,7 @@ import db  # noqa: E402
 STAFF_ROLES = ("commander", "dispatcher", "operator")
 # Max active (booked/arrived) bookings per citizen phone per event date. The
 # anti-tout cap (docs/AUDIT.md C13 — TTD precedent: 545 users → 14,449 tickets).
-BOOKING_CAP_PER_PHONE = int(os.environ.get("BOOKING_CAP_PER_PHONE", "3"))
+BOOKING_CAP_PER_PHONE = int(os.environ.get("BOOKING_CAP_PER_PHONE", "10"))
 # Capacity unification (docs/AUDIT.md C4): never sell more passes than a zone can
 # physically park, beyond a small governed overbook to cover no-shows. The ceiling
 # is Σ(lot capacity) × ratio; slots still meter arrival *rate* per window on top.
@@ -584,18 +585,34 @@ def set_pricing(req: PricingReq, commander: dict = Depends(commander_dep)):
 # Payments — create a Razorpay order (real or mock). The booking is minted only
 # after this order is verified at /api/bookings (server-authoritative amount).
 # --------------------------------------------------------------------------- #
+# One vehicle in a multi-vehicle order: its type, number plate, optional
+# colour/model, and how many people travel in it (headcount only — no personal
+# details are ever stored, just the number).
+class CartItem(BaseModel):
+    vtype: str = Field(pattern="^(2w|car|bus)$")
+    plate: str = Field(min_length=2, max_length=20)
+    vdesc: str | None = Field(default=None, max_length=60)
+    pax: int = Field(default=1, ge=1, le=100)
+
+
 class OrderReq(BaseModel):
     slot_id: str = Field(min_length=1, max_length=128)
-    vtype: str = Field(pattern="^(2w|car|bus)$")     # emergency is free, no order
-    vcount: int = Field(default=1, ge=1, le=50)
     slot_type: str = Field(default="public", pattern="^(public|vip)$")
+    # Multi-vehicle cart: one pass is minted per item, all under a single payment.
+    # `vtype`/`vcount` remain for the legacy single-vehicle path (back-compat).
+    items: list[CartItem] | None = Field(default=None, max_length=50)
+    vtype: str | None = Field(default=None, pattern="^(2w|car|bus)$")
+    vcount: int = Field(default=1, ge=1, le=50)
 
 
 @app.post("/api/payments/order")
 def create_order(req: OrderReq, principal: dict = Depends(citizen_dep)):
     """Compute the fare server-side, open a Razorpay order, and stash a pending
     payment row. Returns what the checkout widget needs. In mock mode (no keys) the
-    order_id is synthetic and `mock` is true so the client skips real checkout."""
+    order_id is synthetic and `mock` is true so the client skips real checkout.
+
+    With `items`, the order covers several vehicles (one pass each) under one
+    payment; the cart is stored server-side so the booking step can't tamper it."""
     phone = principal["sub"]
     conn = db.connect()
     slot = conn.execute("SELECT * FROM slots WHERE id=?", (req.slot_id,)).fetchone()
@@ -605,11 +622,26 @@ def create_order(req: OrderReq, principal: dict = Depends(citizen_dep)):
     if slot["slot_type"] != req.slot_type:
         conn.close()
         raise HTTPException(400, "slot_type mismatch")
-    unit = _price_for(conn, req.slot_type, req.vtype)
-    if unit is None:
-        conn.close()
-        raise HTTPException(400, "no price configured for this lane/vehicle")
-    amount = unit * req.vcount
+
+    # Normalise to a cart either way, so pricing + storage are uniform.
+    if req.items:
+        cart = [{"vtype": it.vtype, "plate": tickets.normalize_plate(it.plate),
+                 "vdesc": (it.vdesc or "").strip()[:40], "pax": it.pax}
+                for it in req.items]
+    else:
+        if not req.vtype:
+            conn.close()
+            raise HTTPException(400, "no vehicles in order")
+        cart = [{"vtype": req.vtype, "plate": "", "vdesc": "", "pax": 1}
+                for _ in range(req.vcount)]
+
+    amount = 0
+    for it in cart:
+        unit = _price_for(conn, req.slot_type, it["vtype"])
+        if unit is None:
+            conn.close()
+            raise HTTPException(400, f"no price configured for {req.slot_type}/{it['vtype']}")
+        amount += unit
     receipt = f"vms-{uuid.uuid4().hex[:12]}"
     if RAZORPAY_LIVE:
         order_id = _create_razorpay_order(
@@ -617,18 +649,22 @@ def create_order(req: OrderReq, principal: dict = Depends(citizen_dep)):
             {"phone": phone, "slot": req.slot_id, "lane": req.slot_type})
     else:
         order_id = f"order_mock_{uuid.uuid4().hex}"
+    # vtype column kept for back-compat/reporting; cart is the authoritative list.
+    head_vtype = cart[0]["vtype"] if len(cart) == 1 else "mixed"
     conn.execute(
         "INSERT INTO payments(order_id,phone,slot_id,vtype,vcount,slot_type,amount,"
-        "status,created_at) VALUES(?,?,?,?,?,?,?, 'created', ?)",
-        (order_id, phone, req.slot_id, req.vtype, req.vcount, req.slot_type,
-         amount, now_iso()),
+        "cart,status,created_at) VALUES(?,?,?,?,?,?,?,?, 'created', ?)",
+        (order_id, phone, req.slot_id, head_vtype, len(cart), req.slot_type,
+         amount, json.dumps(cart), now_iso()),
     )
     conn.commit()
     conn.close()
+    desc = (f"{req.slot_type.upper()} entry · {len(cart)} vehicle"
+            f"{'s' if len(cart) != 1 else ''}")
     return {
         "order_id": order_id, "amount": amount, "amount_paise": amount * 100,
         "currency": "INR", "key_id": RAZORPAY_KEY_ID, "mock": not RAZORPAY_LIVE,
-        "name": "Ujjain VMS", "description": f"{req.slot_type.upper()} entry · {req.vtype}",
+        "name": "Ujjain VMS", "description": desc, "vehicles": len(cart),
     }
 
 
@@ -803,6 +839,141 @@ def create_booking(req: BookingReq, authorization: str | None = Header(None)):
     }
 
 
+def _mint_booking(conn, slot, *, vtype, vcount, plate_raw, vdesc_raw, slot_type,
+                  phone, pax, amount):
+    """Sign one pass + insert one booking row inside an already-open transaction.
+    Returns the citizen-facing pass dict. Caller owns the txn + capacity checks."""
+    bid = uuid.uuid4().hex
+    code = tickets.human_code(bid)
+    plate = tickets.normalize_plate(plate_raw)
+    vdesc = (vdesc_raw or "").strip()[:40]
+    lot = _primary_lot(conn, slot["zone_id"])
+    lot_id = lot["id"] if lot else None
+    lot_name = lot["name"] if lot else None
+    lot_lat = lot["lat"] if lot else None
+    lot_lng = lot["lng"] if lot else None
+    exp = (datetime.fromisoformat(f"{slot['date']}T{slot['end']}:00+00:00")
+           + timedelta(hours=TICKET_EXP_GRACE_HOURS)).isoformat()
+    payload = {
+        "v": tickets.PAYLOAD_VERSION, "kid": tickets.KEY_ID,
+        "bid": bid, "zone": slot["zone_id"], "slot": slot["id"],
+        "date": slot["date"], "ws": slot["start"], "we": slot["end"],
+        "vt": vtype, "vc": vcount, "st": slot_type,
+        "ph": tickets.plate_hash(plate) if plate else "",
+        "pl": tickets.plate_last4(plate), "vdesc": vdesc,
+        "iat": now_iso(), "exp": exp, "jti": uuid.uuid4().hex,
+    }
+    token = tickets.sign_ticket(payload)
+    qr = _qr_data_url(token)
+    ts = now_iso()
+    conn.execute(
+        "INSERT INTO bookings(id,slot_id,zone_id,vtype,vcount,plate,vdesc,"
+        "lot_id,phone,status,code,token,slot_type,amount,pax,created_at,updated_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?, 'booked', ?,?,?,?,?,?,?)",
+        (bid, slot["id"], slot["zone_id"], vtype, vcount, plate, vdesc,
+         lot_id, phone, code, token, slot_type, amount, pax, ts, ts),
+    )
+    window = f"{slot['start']}–{slot['end']}"
+    park = f" Park at {lot_name}." if lot_name else ""
+    sms = (f"UJJAIN VMS: {slot_type.upper()} slot booked. "
+           f"{slot['zone_id'].title()} {slot['date']} {window}.{park} "
+           f"Entry code {code}. Show QR or quote code at the gate.")
+    return {
+        "id": bid, "code": code, "token": token, "qr": qr,
+        "zone": slot["zone_id"], "date": slot["date"], "window": window,
+        "vtype": vtype, "vcount": vcount, "slot_type": slot_type,
+        "plate": plate, "vdesc": vdesc, "amount": amount, "pax": pax,
+        "lot_id": lot_id, "lot_name": lot_name,
+        "lot_lat": lot_lat, "lot_lng": lot_lng, "sms": sms,
+    }
+
+
+class BatchBookingReq(BaseModel):
+    # The cart lives on the server (stored at order time), so the booking step only
+    # needs the payment proof — the client can't change vehicles or plates here.
+    razorpay_order_id: str = Field(min_length=1, max_length=64)
+    razorpay_payment_id: str | None = Field(default=None, max_length=64)
+    razorpay_signature: str | None = Field(default=None, max_length=256)
+
+
+@app.post("/api/bookings/batch")
+def create_bookings_batch(req: BatchBookingReq, principal: dict = Depends(citizen_dep)):
+    """Mint one per-vehicle pass for every item in a paid multi-vehicle order.
+    The whole cart is one atomic booking: capacity is checked for the total, then
+    each vehicle gets its own signed QR pass. Headcount (pax) is stored per pass."""
+    phone = principal["sub"]
+    conn = db.connect()
+    conn.isolation_level = None
+    try:
+        pay = conn.execute("SELECT * FROM payments WHERE order_id=?",
+                           (req.razorpay_order_id,)).fetchone()
+        if not pay:
+            raise HTTPException(400, "unknown payment order")
+        if pay["phone"] != phone:
+            raise HTTPException(403, "payment belongs to another user")
+        cart = json.loads(pay["cart"] or "[]")
+        if not cart:
+            raise HTTPException(400, "order has no vehicles")
+        slot = conn.execute("SELECT * FROM slots WHERE id=?",
+                            (pay["slot_id"],)).fetchone()
+        if not slot:
+            raise HTTPException(404, "unknown slot")
+        slot_type = pay["slot_type"]
+
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if pay["status"] != "created":
+                raise HTTPException(409, "payment already used")
+            if RAZORPAY_LIVE and not _verify_razorpay_signature(
+                    req.razorpay_order_id, req.razorpay_payment_id,
+                    req.razorpay_signature):
+                raise HTTPException(400, "payment signature verification failed")
+            if _active_lockdown_scope(conn, slot["zone_id"]):
+                raise HTTPException(423, "zone under lockdown — bookings suspended")
+
+            footprint = sum(VEHICLE_FOOTPRINT[it["vtype"]] for it in cart)
+            # Per-identity cap (anti-tout): existing active + this cart's vehicles.
+            active = conn.execute(
+                "SELECT COUNT(*) AS n FROM bookings b JOIN slots s ON s.id=b.slot_id"
+                " WHERE b.phone=? AND s.date=? AND b.status IN ('booked','arrived')",
+                (phone, slot["date"]),
+            ).fetchone()["n"]
+            if active + len(cart) > BOOKING_CAP_PER_PHONE:
+                raise HTTPException(
+                    429, f"booking limit reached ({BOOKING_CAP_PER_PHONE} vehicles "
+                         f"per phone for {slot['date']})")
+            if _slot_booked(conn, slot["id"]) + footprint > slot["capacity"]:
+                raise HTTPException(409, "slot full")
+            phys = _zone_physical_capacity(conn, slot["zone_id"])
+            if phys and footprint and (
+                    _zone_active_count(conn, slot["zone_id"], slot["date"]) + footprint
+                    > round(phys * OVERBOOK_RATIO)):
+                raise HTTPException(409, "zone parking sold out for this date")
+
+            passes = []
+            for it in cart:
+                unit = _price_for(conn, slot_type, it["vtype"]) or 0
+                passes.append(_mint_booking(
+                    conn, slot, vtype=it["vtype"], vcount=1,
+                    plate_raw=it.get("plate"), vdesc_raw=it.get("vdesc"),
+                    slot_type=slot_type, phone=phone, pax=it.get("pax", 1),
+                    amount=unit))
+            conn.execute(
+                "UPDATE payments SET status='consumed', payment_id=?, booking_id=?"
+                " WHERE order_id=?",
+                (req.razorpay_payment_id, passes[0]["id"], req.razorpay_order_id),
+            )
+            audit(conn, phone, "booking.create_batch",
+                  f"{len(passes)} passes {slot['zone_id']} {slot['start']} ₹{pay['amount']}")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.close()
+    return {"passes": passes, "amount": pay["amount"], "count": len(passes)}
+
+
 @app.get("/api/bookings/{bid}")
 def get_booking(bid: str):
     conn = db.connect()
@@ -874,6 +1045,7 @@ def my_bookings(principal: dict = Depends(citizen_dep)):
             "vcount": b["vcount"], "slot_type": b["slot_type"], "status": b["status"],
             "plate": b["plate"], "vdesc": b["vdesc"], "lot_name": b["lot_name"],
             "lot_lat": b["llat"], "lot_lng": b["llng"], "amount": b["amount"],
+            "pax": b["pax"],
         })
     return out
 

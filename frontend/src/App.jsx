@@ -76,7 +76,7 @@ export default function App() {
   if (!role) return <Portal onPick={pickRole} />
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50">
+    <div className="min-h-screen flex flex-col bg-slate-50 overflow-x-clip">
       <NavBar role={role} date={date} setDate={setDate} section={section}
         setSection={setSection} onHome={() => go(null, null)} showDate={role !== 'operator'} />
       <main className="flex-1 w-full">
@@ -92,53 +92,56 @@ function NavBar({ role, date, setDate, section, setSection, onHome, showDate }) 
   const sections = SECTIONS[role]
   const Link = ({ id, label, mobile }) => {
     const active = section === id
+    // Inline desktop tabs are compact (px-3/text-sm) so 6 command tabs fit at the
+    // lg breakpoint; the phone/tablet scroll row keeps touch-sized hit areas.
+    const size = mobile ? 'px-4 py-2 text-[15px] shrink-0' : 'px-3 py-2 text-sm xl:px-4 xl:text-[15px]'
     return (
       <button onClick={() => setSection(id)} aria-current={active ? 'page' : undefined}
-        className={`whitespace-nowrap rounded-lg px-4 py-2 text-[15px] font-semibold transition
-          ${active ? 'bg-orange-50 text-orange-700' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'}
-          ${mobile ? 'shrink-0' : ''}`}>
+        className={`whitespace-nowrap rounded-lg font-semibold transition ${size}
+          ${active ? 'bg-orange-50 text-orange-700' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'}`}>
         {label}
       </button>
     )
   }
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-slate-200">
-      <div className="max-w-6xl mx-auto px-5 lg:px-8">
-        <div className="h-[68px] flex items-center gap-6">
-          <button onClick={onHome} className="flex items-center gap-3 shrink-0 text-left">
-            <span className="text-3xl">🛕</span>
+      <div className="max-w-6xl mx-auto px-4 sm:px-5 lg:px-8">
+        <div className="h-[60px] sm:h-[68px] flex items-center gap-3 sm:gap-4 xl:gap-6">
+          <button onClick={onHome} className="flex items-center gap-2 sm:gap-3 shrink-0 text-left">
+            <span className="text-2xl sm:text-3xl">🛕</span>
             <span className="leading-tight">
-              <span className="block font-extrabold text-slate-900 text-xl tracking-tight">
+              <span className="block font-extrabold text-slate-900 text-lg sm:text-xl tracking-tight">
                 Ujjain <span className="text-orange-600">VMS</span>
               </span>
-              <span className="block text-xs text-slate-500 font-medium">Govt. of Madhya Pradesh</span>
+              <span className="hidden sm:block text-xs text-slate-500 font-medium">Govt. of Madhya Pradesh</span>
             </span>
           </button>
 
-          <nav className="hidden md:flex items-center gap-1 ml-2">
+          <nav className="hidden lg:flex items-center gap-1 ml-2">
             {sections.map(([id, label]) => <Link key={id} id={id} label={label} />)}
           </nav>
 
-          <div className="ml-auto flex items-center gap-2 sm:gap-3">
+          <div className="ml-auto flex items-center gap-2 sm:gap-3 min-w-0">
             {showDate && (
-              <label className="hidden sm:flex items-center gap-2 text-sm text-slate-500">
-                <span className="hidden lg:inline">Event date</span>
+              <label className="flex items-center gap-2 text-sm text-slate-500 min-w-0">
+                <span className="hidden xl:inline shrink-0">Event date</span>
                 <select value={date} onChange={(e) => setDate(e.target.value)}
-                  className="bg-white text-slate-800 text-sm font-medium rounded-lg border border-slate-300 px-3 py-2">
+                  className="bg-white text-slate-800 text-xs sm:text-sm font-medium rounded-lg border border-slate-300 px-2 sm:px-3 py-2 max-w-[8.5rem]">
                   {EVENT_DATES.map((d) => <option key={d} value={d}>{d}</option>)}
                 </select>
               </label>
             )}
             <button onClick={onHome}
-              className="text-sm font-semibold text-slate-600 hover:text-slate-900 border border-slate-300
-                rounded-lg px-3 py-2 hover:bg-slate-100">
+              className="shrink-0 text-sm font-semibold text-slate-600 hover:text-slate-900 border border-slate-300
+                rounded-lg px-2.5 sm:px-3 py-2 hover:bg-slate-100">
               ↩ <span className="hidden sm:inline">Portals</span>
             </button>
           </div>
         </div>
 
-        {/* mobile section nav row */}
-        <nav className="md:hidden flex gap-1.5 overflow-x-auto pb-3 -mt-0.5">
+        {/* phone + tablet section nav row — scrolls horizontally; inline nav only at lg+ */}
+        <nav className="lg:hidden flex gap-1.5 overflow-x-auto pb-3 -mt-0.5 [-webkit-overflow-scrolling:touch]
+          [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {sections.map(([id, label]) => <Link key={id} id={id} label={label} mobile />)}
         </nav>
       </div>

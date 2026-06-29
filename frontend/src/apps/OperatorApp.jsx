@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
   cpStatus, cpLog, cpVerify, cpNetwork, cpDenyAll, cpSync, cpLots, cpParked, cpReassign, cpExit,
   getCheckpointBase, setCheckpointBase,
@@ -20,6 +20,11 @@ export default function OperatorApp({ section }) {
   const [err, setErr] = useState('')
   const [base, setBase] = useState(getCheckpointBase())
   const [scanning, setScanning] = useState(false)   // camera QR scanner on/off
+  // Gate mode: ENTRY admits & assigns a lot; EXIT releases the parked space.
+  // Persisted so a node stays configured as an entry- or exit-lane between sessions.
+  const [mode, setMode] = useState(() => localStorage.getItem('gate_mode') || 'entry')
+  const isExit = mode === 'exit'
+  const switchMode = (m) => { localStorage.setItem('gate_mode', m); setMode(m); setResult(null); setErr(''); setToken(''); setCode(''); setObserved('') }
 
   const refresh = () => {
     cpStatus().then((s) => { setStatus(s); setReachable(true) }).catch(() => setReachable(false))
@@ -33,6 +38,38 @@ export default function OperatorApp({ section }) {
     return () => clearInterval(t)
   }, [])
 
+  // Auto-sync: best-effort, silent (never interrupts the gate). Fires when the
+  // link comes back up (off→on) and then periodically while it stays up, so an
+  // operator never has to remember to push the offline log. Manual "Sync now"
+  // stays in the Node tab for an immediate, on-demand push.
+  const [autoSync, setAutoSync] = useState(() => localStorage.getItem('gate_autosync') !== 'off')
+  const [syncedAt, setSyncedAt] = useState(null)   // last successful auto-sync (UI hint)
+  const lastNet = useRef(null)
+  const syncing = useRef(false)
+  const bgSync = async () => {
+    if (syncing.current) return
+    syncing.current = true
+    try { await cpSync(); setSyncedAt(new Date().toISOString()) } catch { /* link not ready — try later */ }
+    finally { syncing.current = false; refresh() }
+  }
+  useEffect(() => {
+    const net = status?.network
+    if (autoSync && net === 'on' && lastNet.current === 'off') bgSync()  // just reconnected
+    lastNet.current = net
+  }, [status?.network, autoSync])
+  useEffect(() => {
+    if (!autoSync || status?.network !== 'on') return
+    const t = setInterval(() => { if (!document.hidden) bgSync() }, 20000)
+    return () => clearInterval(t)
+  }, [autoSync, status?.network])
+  // Browser regaining connectivity is also a reconnect signal (real device case).
+  useEffect(() => {
+    const onUp = () => { if (autoSync && status?.network === 'on') bgSync() }
+    window.addEventListener('online', onUp)
+    return () => window.removeEventListener('online', onUp)
+  }, [autoSync, status?.network])
+  const toggleAutoSync = () => setAutoSync((a) => { localStorage.setItem('gate_autosync', a ? 'off' : 'on'); return !a })
+
   const online = status?.network === 'on'
   const denying = status?.denyall === 'on'
   const verify = async (body) => {
@@ -43,16 +80,18 @@ export default function OperatorApp({ section }) {
       if (r.decision === 'admit') { setToken(''); setCode(''); setObserved('') }
     } catch (e) { setErr(e.message) } finally { setBusy(false); refresh() }
   }
-  // Camera decoded a QR → feed the token in and verify immediately, no typing.
+  // Camera decoded a QR → act on it immediately, no typing. In EXIT mode the same
+  // scan releases the parked space instead of admitting.
   // Any observed plate already entered is included so binding is still checked.
-  const onScan = (text) => { setToken(text); verify({ token: text }) }
+  const onScan = (text) => { setToken(text); isExit ? doExit({ token: text }) : verify({ token: text }) }
   const guard = (fn) => async () => { if (!status) return; setErr(''); try { await fn(); refresh() } catch (e) { setErr(e.message) } }
-  const registerExit = async () => {
+  const doExit = async (body) => {
     setErr(''); setResult(null); setBusy(true)
     try {
-      const r = await cpExit(token ? { token } : { code })
-      setResult({ decision: 'admit', reason: `↩ exit registered — ${r.freed_lot} freed a space`, booking_id: r.booking_id })
-      setToken(''); setCode('')
+      const r = await cpExit(body || (token ? { token } : { code }))
+      setResult({ decision: 'exit', reason: `↩ exit registered — a space freed in ${r.freed_lot}`,
+        booking_id: r.booking_id, freed_lot: r.freed_lot })
+      setToken(''); setCode(''); setObserved('')
     } catch (e) { setErr(e.message) } finally { setBusy(false); refresh() }
   }
   const doReassign = async (to_lot) => {
@@ -75,10 +114,13 @@ export default function OperatorApp({ section }) {
   const st = staleness(status?.last_sync)
 
   return (
-    <div className="max-w-3xl mx-auto px-5 lg:px-8 py-8 sm:py-10 space-y-6">
+    <div className="max-w-3xl mx-auto px-4 sm:px-5 lg:px-8 py-6 sm:py-10 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <div className="text-sm text-slate-500">Checkpoint</div>
+          <div className="text-sm text-slate-500 flex items-center gap-2">
+            Checkpoint
+            <Badge tone={isExit ? 'amber' : 'indigo'}>{isExit ? '↩ exit lane' : '→ entry lane'}</Badge>
+          </div>
           <div className="text-2xl font-bold text-slate-900 leading-tight">{status?.zone_id || '…'} gate</div>
         </div>
         <div className="flex items-center gap-2">
@@ -120,12 +162,14 @@ ZONE_ID=indore CHECKPOINT_ID=cp-indore CENTRAL_URL=http://127.0.0.1:8000 \
           <div className="space-y-6">
             {result && (
               <div role="alert" aria-live="assertive"
-                className={`rounded-2xl p-8 text-center text-white on-dark pop-in
-                  ${result.decision === 'admit' ? 'bg-emerald-600' : 'bg-rose-600'}`}>
-                <div className="text-6xl font-extrabold tracking-tight">
-                  {result.decision === 'admit' ? '✓ ADMIT' : '✕ DENY'}
+                className={`rounded-2xl p-5 sm:p-8 text-center text-white on-dark pop-in
+                  ${result.decision === 'admit' ? 'bg-emerald-600'
+                    : result.decision === 'exit' ? 'bg-indigo-700' : 'bg-rose-600'}`}>
+                <div className="text-4xl sm:text-6xl font-extrabold tracking-tight">
+                  {result.decision === 'admit' ? '✓ ADMIT'
+                    : result.decision === 'exit' ? '↩ EXIT' : '✕ DENY'}
                 </div>
-                <div className="mt-2 text-lg opacity-90">{result.reason}</div>
+                <div className="mt-2 text-base sm:text-lg opacity-90 break-words">{result.reason}</div>
 
                 {/* Parking lot the gate assigned. Overflow = booked lot was full
                     and the vehicle was redirected down the zone cascade (§9). */}
@@ -134,7 +178,7 @@ ZONE_ID=indore CHECKPOINT_ID=cp-indore CENTRAL_URL=http://127.0.0.1:8000 \
                     <div className="text-xs uppercase tracking-wider opacity-75">
                       {result.overflow ? '↪ Overflow — redirect to' : 'Direct vehicle to'}
                     </div>
-                    <div className="text-3xl font-extrabold tracking-tight">🅿 {result.lot_name}</div>
+                    <div className="text-2xl sm:text-3xl font-extrabold tracking-tight break-words">🅿 {result.lot_name}</div>
                   </div>
                 )}
 
@@ -145,7 +189,7 @@ ZONE_ID=indore CHECKPOINT_ID=cp-indore CENTRAL_URL=http://127.0.0.1:8000 \
                     <div className="text-xs uppercase tracking-wider opacity-75">
                       {result.decision === 'admit' ? 'Check this plate on the vehicle' : 'Pass was issued for'}
                     </div>
-                    <div className="text-2xl font-mono font-bold tracking-[0.15em]">
+                    <div className="text-xl sm:text-2xl font-mono font-bold tracking-[0.12em] sm:tracking-[0.15em] break-all">
                       {result.plate || `••• ${result.plate_last}`}
                     </div>
                     {!result.plate && result.plate_last && (
@@ -197,12 +241,26 @@ ZONE_ID=indore CHECKPOINT_ID=cp-indore CENTRAL_URL=http://127.0.0.1:8000 \
             )}
 
             <Card className="p-6">
+              {/* Entry vs exit lane. Same QR; entry admits + assigns a lot, exit
+                  releases the space. Persisted per node. */}
+              <div className="grid grid-cols-2 gap-2 mb-5 p-1 bg-slate-100 rounded-xl">
+                {[['entry', '→ Entry — admit'], ['exit', '↩ Exit — free space']].map(([m, lbl]) => (
+                  <button key={m} onClick={() => switchMode(m)}
+                    className={`rounded-lg py-2.5 text-sm font-semibold transition
+                      ${mode === m ? (m === 'exit' ? 'bg-indigo-700 text-white shadow' : 'bg-emerald-600 text-white shadow')
+                        : 'text-slate-600 hover:text-slate-800'}`}>{lbl}</button>
+                ))}
+              </div>
+
               {/* Camera QR scan — point the pass at the lens; it auto-feeds the
-                  token and verifies offline-capably, no typing. */}
+                  token and acts (admit/exit) offline-capably, no typing. */}
               <div className="flex items-center justify-between mb-3">
                 <div>
                   <div className="text-base font-semibold text-slate-800">📷 Scan QR with camera</div>
-                  <div className="text-sm text-slate-500">Auto-reads &amp; verifies — hands-free at the gate.</div>
+                  <div className="text-sm text-slate-500">
+                    {isExit ? 'Auto-reads & frees the parking space — hands-free.'
+                      : 'Auto-reads & verifies — hands-free at the gate.'}
+                  </div>
                 </div>
                 <Switch on={scanning} onClick={() => setScanning((s) => !s)} onLabel="CAM ON" offLabel="CAM OFF" />
               </div>
@@ -210,25 +268,32 @@ ZONE_ID=indore CHECKPOINT_ID=cp-indore CENTRAL_URL=http://127.0.0.1:8000 \
                 <div className="mb-5">
                   <QrScanner onDetect={onScan} paused={busy} />
                   <p className="text-xs text-slate-400 mt-2">
-                    Enter the observed plate below first if you want the gate to check vehicle binding on the auto-scan.
+                    {isExit ? 'Scan the leaving vehicle’s pass — its parking space is freed automatically.'
+                      : 'Enter the observed plate below first if you want the gate to check vehicle binding on the auto-scan.'}
                   </p>
                 </div>
               )}
 
-              <label htmlFor="obs" className="text-sm font-medium text-slate-600">
-                Observed number plate <span className="text-slate-400">(checked against the pass)</span>
-              </label>
-              <input id="obs" value={observed} onChange={(e) => setObserved(e.target.value.toUpperCase())}
-                placeholder="read it off the vehicle — e.g. MP09 AB 1234" maxLength={16}
-                className="w-full mt-2 mb-5 border border-slate-300 rounded-xl px-4 py-3 text-base
-                  font-mono tracking-[0.15em] uppercase" />
+              {/* Plate binding is an entry-time check; not needed to release a space. */}
+              {!isExit && (<>
+                <label htmlFor="obs" className="text-sm font-medium text-slate-600">
+                  Observed number plate <span className="text-slate-400">(checked against the pass)</span>
+                </label>
+                <input id="obs" value={observed} onChange={(e) => setObserved(e.target.value.toUpperCase())}
+                  placeholder="read it off the vehicle — e.g. MP09 AB 1234" maxLength={16}
+                  className="w-full mt-2 mb-5 border border-slate-300 rounded-xl px-4 py-3 text-base
+                    font-mono tracking-[0.15em] uppercase" />
+              </>)}
 
-              <label htmlFor="tok" className="text-sm font-medium text-slate-600">Or paste QR token (manual fallback)</label>
+              <label htmlFor="tok" className="text-sm font-medium text-slate-600">
+                {isExit ? 'Paste QR token (manual fallback)' : 'Or paste QR token (manual fallback)'}
+              </label>
               <textarea id="tok" rows={2} value={token} onChange={(e) => setToken(e.target.value)}
                 placeholder="base64url ticket token from the QR…"
                 className="w-full mt-2 border border-slate-300 rounded-xl p-3 text-sm font-mono" />
               <Button variant="indigo" className="w-full mt-2 py-3 text-base" disabled={!token || busy}
-                onClick={() => verify({ token })}>{busy ? <Spinner /> : 'Verify QR'}</Button>
+                onClick={() => (isExit ? doExit({ token }) : verify({ token }))}>
+                {busy ? <Spinner /> : isExit ? '↩ Register exit' : 'Verify QR'}</Button>
 
               <div className="flex items-center gap-3 my-5 text-sm text-slate-500">
                 <div className="flex-1 border-t border-slate-200" /> or type the code <div className="flex-1 border-t border-slate-200" />
@@ -237,13 +302,9 @@ ZONE_ID=indore CHECKPOINT_ID=cp-indore CENTRAL_URL=http://127.0.0.1:8000 \
                 <input value={code} maxLength={6} onChange={(e) => setCode(e.target.value.toUpperCase())}
                   placeholder="ABC123" aria-label="6-character entry code"
                   className="flex-1 border border-slate-300 rounded-xl px-4 py-3 text-lg font-mono tracking-[0.25em] tabular-nums text-center" />
-                <Button variant="indigo" className="px-6 text-base" disabled={code.length < 6 || busy} onClick={() => verify({ code })}>Verify</Button>
-              </div>
-
-              {/* Gate-out: register a vehicle leaving so its lot frees a space. */}
-              <div className="flex items-center gap-3 mt-5 pt-4 border-t border-slate-100">
-                <span className="text-sm text-slate-500 flex-1">Vehicle leaving? Free its space:</span>
-                <Button variant="ghost" disabled={(!token && !code) || busy} onClick={registerExit}>↩ Register exit</Button>
+                <Button variant="indigo" className="px-6 text-base" disabled={code.length < 6 || busy}
+                  onClick={() => (isExit ? doExit({ code }) : verify({ code }))}>
+                  {isExit ? 'Exit' : 'Verify'}</Button>
               </div>
             </Card>
           </div>
@@ -310,9 +371,18 @@ ZONE_ID=indore CHECKPOINT_ID=cp-indore CENTRAL_URL=http://127.0.0.1:8000 \
                 <Switch on={denying} disabled={!status} tone="rose" onLabel="DENY" offLabel="off"
                   onClick={guard(() => cpDenyAll(!denying))} />
               </Ctl>
+              <Ctl title="Auto-sync when online"
+                hint={autoSync
+                  ? (online ? 'on · syncs on reconnect + every 20s' : 'on · will sync when link returns')
+                  : 'off · push manually below'}>
+                <Switch on={autoSync} onClick={toggleAutoSync} onLabel="AUTO" offLabel="off" />
+              </Ctl>
               <div className="flex items-center justify-between">
                 <div><div className="text-base font-medium text-slate-800">Batch sync</div>
-                  <div className="text-sm text-slate-500">push log · pull bookings/lockdowns</div></div>
+                  <div className="text-sm text-slate-500">
+                    push log · pull bookings/lockdowns
+                    {syncedAt && <span className="text-emerald-600"> · auto-synced {staleness(syncedAt).text}</span>}
+                  </div></div>
                 <Button className="px-5" disabled={!online} onClick={guard(cpSync)}>Sync now</Button>
               </div>
             </Card>

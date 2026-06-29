@@ -15,6 +15,13 @@ body {
   line-height: 1.55;
 }
 
+/* Never let a stray wide child cause a horizontal scrollbar on small screens. */
+html, body { overflow-x: hidden; }
+/* Respect notch / rounded-corner safe areas on phones (PWA / standalone too). */
+body { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+/* Media never overflows its column. */
+img, video, canvas, svg { max-width: 100%; }
+
 /* Accessible focus ring everywhere (WCAG 2.4.7); indigo on light, white on dark. */
 *:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; border-radius: 6px; }
 .on-dark *:focus-visible { outline-color: #fff; }

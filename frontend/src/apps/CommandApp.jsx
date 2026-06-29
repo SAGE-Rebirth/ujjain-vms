@@ -148,8 +148,8 @@ function CommandConsole({ date, section, staff, onLogout }) {
   const allSynced = tot.synced === data.zones.length
 
   return (
-    <div className="max-w-6xl mx-auto px-5 lg:px-8 py-8 sm:py-10 space-y-6">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
+    <div className="max-w-6xl mx-auto px-4 sm:px-5 lg:px-8 py-6 sm:py-10 space-y-6">
+      <div className="flex items-center justify-between gap-3 sm:gap-4 flex-wrap">
         <h1 className="text-2xl font-bold text-slate-900">{TITLES[section]} <span className="text-slate-400 font-medium text-lg">· {date}</span></h1>
         <div className="flex items-center gap-3">
           <span className="text-sm text-slate-500 hidden sm:inline">👤 {staff.name}</span>
@@ -172,7 +172,7 @@ function CommandConsole({ date, section, staff, onLogout }) {
       <div key={section} className="fade-up space-y-6">
         {section === 'dash' && (
           <>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
               <Stat label="Booked" value={tot.booked} icon="🎫" tone="indigo" sub={`of ${tot.cap} capacity`} />
               <Stat label="Arrived" value={tot.arrived} icon="✅" tone="green" sub="verified at gates" />
               <Stat label="Zones locked" value={tot.locked} icon="🔒" tone={tot.locked ? 'red' : 'indigo'} sub={`of ${data.zones.length}`} />
@@ -184,17 +184,17 @@ function CommandConsole({ date, section, staff, onLogout }) {
               <Button variant="ghost" onClick={reconcile}>♻ Reconcile no-shows</Button>
             </div>
             <Card>
-              <div className="px-6 py-4 border-b border-slate-100 text-lg font-bold text-slate-800">Zones</div>
+              <div className="px-4 sm:px-6 py-4 border-b border-slate-100 text-lg font-bold text-slate-800">Zones</div>
               <div className="divide-y divide-slate-100">
                 {data.zones.map((z) => {
                   const s = staleness(z.last_sync)
                   return (
-                    <div key={z.id} className="px-6 py-4 flex items-center gap-4">
-                      <div className={`w-9 h-11 rounded-lg flex items-center justify-center text-base
+                    <div key={z.id} className="px-4 sm:px-6 py-4 flex items-center gap-3 sm:gap-4 flex-wrap">
+                      <div className={`w-9 h-11 rounded-lg flex items-center justify-center text-base shrink-0
                         ${z.locked ? 'bg-rose-100 text-rose-600' : 'bg-emerald-100 text-emerald-600'}`}>
                         {z.locked ? '🔒' : '🟢'}
                       </div>
-                      <div className="flex-1 min-w-0">
+                      <div className="flex-1 min-w-[8rem]">
                         <div className="font-semibold text-base text-slate-800 truncate">{z.name}</div>
                         <div className="text-sm text-slate-500">sync <span className={s.cls}>{s.text}</span></div>
                       </div>
@@ -656,9 +656,9 @@ function Num({ n, l, c = 'text-slate-800' }) {
 
 function DashSkeleton() {
   return (
-    <div className="max-w-6xl mx-auto px-5 lg:px-8 py-10 space-y-6">
-      <Skeleton className="h-9 w-64" />
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-28" />)}</div>
+    <div className="max-w-6xl mx-auto px-4 sm:px-5 lg:px-8 py-6 sm:py-10 space-y-6">
+      <Skeleton className="h-9 w-48 sm:w-64 max-w-full" />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-28" />)}</div>
       <Skeleton className="h-80" />
     </div>
   )

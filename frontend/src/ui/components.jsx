@@ -128,9 +128,10 @@ export function Switch({ on, onClick, disabled, onLabel = 'ON', offLabel = 'OFF'
 // ── Modal ───────────────────────────────────────────────────────────────────
 export function Modal({ children, onClose }) {
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
       onClick={onClose}>
-      <div className="bg-white rounded-2xl p-5 max-w-sm w-full pop-in" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl p-5 max-w-sm w-full max-h-[90dvh] overflow-y-auto pop-in"
+        onClick={(e) => e.stopPropagation()}>
         {children}
       </div>
     </div>

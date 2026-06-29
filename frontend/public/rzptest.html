@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>rzp test</title></head>
+<body>
+<button id="pay">Pay</button>
+<pre id="log"></pre>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script>
+const log = (...a) => { console.log('[RZPTEST]', ...a); document.getElementById('log').textContent += a.map(x=>typeof x==='object'?JSON.stringify(x):x).join(' ')+'\n' }
+window.addEventListener('error', e => log('window.error', e.message))
+const ORDER = { id: 'order_T7MTkNta8NoRlZ', key: 'rzp_test_S8nBupaDcI7xxs', amount: 10000 }
+document.getElementById('pay').onclick = () => {
+  log('opening', ORDER)
+  const rzp = new window.Razorpay({
+    key: ORDER.key, amount: ORDER.amount, currency: 'INR',
+    name: 'Ujjain VMS', description: 'test', order_id: ORDER.id,
+    handler: r => log('handler', r),
+    modal: { ondismiss: () => log('ondismiss fired') },
+  })
+  rzp.on('payment.failed', r => log('payment.failed', r.error))
+  rzp.open()
+}
+</script>
+</body></html>

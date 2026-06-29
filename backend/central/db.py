@@ -255,11 +255,20 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE bookings ADD COLUMN {col} TEXT")
     if "amount" not in have:
         conn.execute("ALTER TABLE bookings ADD COLUMN amount INTEGER")  # fare paid (rupees)
+    if "pax" not in have:
+        # People travelling in this vehicle. Headcount only — no personal details
+        # are stored (just the number), per requirement.
+        conn.execute("ALTER TABLE bookings ADD COLUMN pax INTEGER DEFAULT 1")
     # Backfill updated_at so the first delta sync has a cursor baseline.
     conn.execute("UPDATE bookings SET updated_at=created_at WHERE updated_at IS NULL")
     cp = {r["name"] for r in conn.execute("PRAGMA table_info(checkpoints)").fetchall()}
     if "token" not in cp:
         conn.execute("ALTER TABLE checkpoints ADD COLUMN token TEXT")
+    # Multi-vehicle cart for a single payment (JSON list of line items). Lets one
+    # Razorpay order back several per-vehicle passes.
+    pay = {r["name"] for r in conn.execute("PRAGMA table_info(payments)").fetchall()}
+    if "cart" not in pay:
+        conn.execute("ALTER TABLE payments ADD COLUMN cart TEXT")
 
 
 def _ensure_indexes(conn: sqlite3.Connection) -> None:
