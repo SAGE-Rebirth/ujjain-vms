@@ -530,6 +530,11 @@ def _decide(conn, req: VerifyReq) -> dict:
             return {"decision": "deny",
                     "reason": "booking cancelled" if cached["status"] == "cancelled" else "booking revoked",
                     "booking_id": booking_id, **vehicle}
+        if cached["status"] == "departed":
+            # Single-use pass: once the vehicle has exited, the pass is spent and
+            # cannot re-enter (works offline from the local cache too).
+            return {"decision": "deny", "reason": "already exited — pass used",
+                    "booking_id": booking_id, **vehicle}
         if cached["status"] == "arrived":
             return {"decision": "deny", "reason": "already used (duplicate)",
                     "booking_id": booking_id, **vehicle}
