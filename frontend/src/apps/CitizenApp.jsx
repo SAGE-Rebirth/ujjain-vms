@@ -8,7 +8,7 @@ import {
 } from '../api.js'
 import {
   Button, Card, Badge, FillBar, Stepper, Spinner, Skeleton, Empty,
-  VEHICLES, vehicleIcon,
+  VEHICLES, vehicleIcon, downloadPass,
 } from '../ui/components.jsx'
 
 const STEPS = ['Zone', 'Time', 'Parking', 'Vehicle', 'Pay']
@@ -536,6 +536,13 @@ export function TicketCard({ pass }) {
           <span className="text-slate-400">📩 SMS sent (simulated):</span> {pass.sms}
         </div>
       )}
+      <div className="px-5 pb-5">
+        <button onClick={() => downloadPass(pass).catch(() => {})}
+          className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300
+            text-slate-700 hover:bg-slate-50 font-semibold py-2.5 text-sm transition-colors">
+          ⬇ Download pass (PNG)
+        </button>
+      </div>
     </Card>
   )
 }

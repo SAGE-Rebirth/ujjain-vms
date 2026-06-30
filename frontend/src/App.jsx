@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import CitizenApp from './apps/CitizenApp.jsx'
 import OperatorApp from './apps/OperatorApp.jsx'
 import CommandApp from './apps/CommandApp.jsx'
+import { EventDatePicker } from './ui/components.jsx'
 
 export const EVENT_DATES = ['2028-04-27', '2028-04-28', '2028-05-09']
 
@@ -123,13 +124,10 @@ function NavBar({ role, date, setDate, section, setSection, onHome, showDate }) 
 
           <div className="ml-auto flex items-center gap-2 sm:gap-3 min-w-0">
             {showDate && (
-              <label className="flex items-center gap-2 text-sm text-slate-500 min-w-0">
+              <div className="flex items-center gap-2 text-sm text-slate-500 min-w-0">
                 <span className="hidden xl:inline shrink-0">Event date</span>
-                <select value={date} onChange={(e) => setDate(e.target.value)}
-                  className="bg-white text-slate-800 text-xs sm:text-sm font-medium rounded-lg border border-slate-300 px-2 sm:px-3 py-2 max-w-[8.5rem]">
-                  {EVENT_DATES.map((d) => <option key={d} value={d}>{d}</option>)}
-                </select>
-              </label>
+                <EventDatePicker value={date} dates={EVENT_DATES} onChange={setDate} />
+              </div>
             )}
             <button onClick={onHome}
               className="shrink-0 text-sm font-semibold text-slate-600 hover:text-slate-900 border border-slate-300

@@ -168,6 +168,162 @@ export function staleness(iso) {
   return { text, tone, cls: STALE_CLS[tone] }
 }
 
+// ── Event date picker (calendar popover) ─────────────────────────────────────
+// A real month-grid calendar, but only the seeded event days are selectable —
+// every other day is greyed out (the backend has no slots for them). Quick chips
+// jump straight to an event day even when it's in another month.
+const WK = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
+const isoOf = (y, m, d) => `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+const parseISO = (s) => new Date(`${s}T00:00:00`)
+export function EventDatePicker({ value, dates, onChange, className = '' }) {
+  const [open, setOpen] = React.useState(false)
+  const allowed = React.useMemo(() => new Set(dates), [dates])
+  const init = value ? parseISO(value) : new Date()
+  const [view, setView] = React.useState({ y: init.getFullYear(), m: init.getMonth() })
+  const ref = React.useRef(null)
+
+  React.useEffect(() => {
+    if (!open) return
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey) }
+  }, [open])
+  // Re-centre the grid on the selected month whenever the picker is opened.
+  React.useEffect(() => {
+    if (open && value) { const d = parseISO(value); setView({ y: d.getFullYear(), m: d.getMonth() }) }
+  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const monthName = new Date(view.y, view.m, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' })
+  const firstDow = new Date(view.y, view.m, 1).getDay()
+  const nDays = new Date(view.y, view.m + 1, 0).getDate()
+  const move = (delta) => setView((v) => { const d = new Date(v.y, v.m + delta, 1); return { y: d.getFullYear(), m: d.getMonth() } })
+  const pick = (iso) => { onChange(iso); setOpen(false) }
+  const jump = (iso) => { const d = parseISO(iso); setView({ y: d.getFullYear(), m: d.getMonth() }); onChange(iso); setOpen(false) }
+
+  const cells = []
+  for (let i = 0; i < firstDow; i++) cells.push(null)
+  for (let d = 1; d <= nDays; d++) cells.push(d)
+
+  return (
+    <div ref={ref} className={`relative ${className}`}>
+      <button onClick={() => setOpen((o) => !o)} aria-haspopup="dialog" aria-expanded={open}
+        className="flex items-center gap-2 bg-white text-slate-800 text-xs sm:text-sm font-medium
+          rounded-lg border border-slate-300 px-2.5 sm:px-3 py-2 hover:border-slate-400 transition">
+        <span>📅</span><span className="tabular-nums">{value}</span>
+        <span className="text-slate-400 text-[10px]">▾</span>
+      </button>
+      {open && (
+        <div role="dialog" aria-label="Pick event date"
+          className="absolute right-0 mt-2 z-50 w-[17rem] bg-white rounded-2xl border border-slate-200 shadow-xl p-3 pop-in">
+          <div className="flex items-center justify-between mb-2">
+            <button onClick={() => move(-1)} aria-label="previous month"
+              className="h-8 w-8 rounded-lg text-slate-500 hover:bg-slate-100 text-lg leading-none">‹</button>
+            <span className="text-sm font-bold text-slate-800">{monthName}</span>
+            <button onClick={() => move(1)} aria-label="next month"
+              className="h-8 w-8 rounded-lg text-slate-500 hover:bg-slate-100 text-lg leading-none">›</button>
+          </div>
+          <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-semibold text-slate-400 mb-1">
+            {WK.map((d, i) => <div key={i}>{d}</div>)}
+          </div>
+          <div className="grid grid-cols-7 gap-1">
+            {cells.map((d, i) => {
+              if (d === null) return <div key={i} />
+              const iso = isoOf(view.y, view.m, d)
+              const ok = allowed.has(iso)
+              const sel = iso === value
+              return (
+                <button key={i} disabled={!ok} onClick={() => pick(iso)}
+                  aria-current={sel ? 'date' : undefined}
+                  className={`relative h-9 rounded-lg text-sm font-medium transition
+                    ${sel ? 'bg-orange-500 text-white font-bold shadow-sm'
+                      : ok ? 'text-slate-800 ring-1 ring-orange-200 hover:bg-orange-100'
+                      : 'text-slate-300 cursor-not-allowed'}`}>
+                  {d}
+                  {ok && !sel && <span className="absolute bottom-1 left-1/2 -translate-x-1/2 h-1 w-1 rounded-full bg-orange-500" />}
+                </button>
+              )
+            })}
+          </div>
+          <div className="mt-2.5 pt-2.5 border-t border-slate-100 flex flex-wrap gap-1.5">
+            {dates.map((d) => (
+              <button key={d} onClick={() => jump(d)}
+                className={`text-[11px] px-2 py-1 rounded-md font-semibold transition
+                  ${d === value ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                {parseISO(d).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}
+              </button>
+            ))}
+          </div>
+          <p className="text-[10px] text-slate-400 mt-2 text-center">Event days only · Simhastha 2028</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Downloadable pass (canvas → PNG) ─────────────────────────────────────────
+// Renders the ticket to an offline, self-contained PNG (the QR is already a data
+// URL, so nothing is fetched). Works with no network — same constraint as the gate.
+function loadImg(src) {
+  return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src })
+}
+export async function downloadPass(pass) {
+  const qr = await loadImg(pass.qr)
+  const W = 720, pad = 48, S = 2
+  const details = [
+    ['DATE', pass.date],
+    ['WINDOW', pass.window],
+    ['VEHICLE', `${pass.vtype}${pass.vcount > 1 ? ` ×${pass.vcount}` : ''}`],
+    pass.pax != null ? ['PEOPLE', String(pass.pax)] : null,
+    pass.plate ? ['PLATE', pass.plate + (pass.vdesc ? ` · ${pass.vdesc}` : '')] : null,
+    pass.lotName ? ['PARK AT', pass.lotName] : null,
+  ].filter(Boolean)
+  const headerH = 172, qrSize = 300, qrBlockH = qrSize + 150
+  const rowH = 70, detailH = Math.ceil(details.length / 2) * rowH + 30
+  const H = headerH + qrBlockH + detailH + 30
+  const c = document.createElement('canvas')
+  c.width = W * S; c.height = H * S
+  const x = c.getContext('2d'); x.scale(S, S)
+  const half = (W - pad * 2) / 2
+
+  x.fillStyle = '#ffffff'; x.fillRect(0, 0, W, H)
+  // header band
+  x.fillStyle = '#1e1b4b'; x.fillRect(0, 0, W, headerH)
+  x.fillStyle = 'rgba(255,255,255,.6)'; x.font = '600 17px sans-serif'
+  x.fillText('ENTRY PASS · UJJAIN VMS', pad, 48)
+  x.fillStyle = '#ffffff'; x.font = '700 38px sans-serif'
+  x.fillText(pass.zoneName || '', pad, 98, W - pad * 2)
+  x.fillStyle = 'rgba(255,255,255,.7)'; x.font = '400 20px sans-serif'
+  x.fillText((pass.road || '') + (pass.lotName ? ` · ${pass.lotName}` : ''), pad, 134, W - pad * 2)
+  if (pass.slot_type === 'vip') {
+    x.fillStyle = '#f59e0b'; x.font = '700 16px sans-serif'; x.textAlign = 'right'
+    x.fillText('★ VIP LANE', W - pad, 48); x.textAlign = 'left'
+  }
+  // QR + manual code
+  const qx = (W - qrSize) / 2, qy = headerH + 36
+  x.drawImage(qr, qx, qy, qrSize, qrSize)
+  x.textAlign = 'center'
+  x.fillStyle = '#64748b'; x.font = '400 16px sans-serif'
+  x.fillText('Manual code (if scan fails)', W / 2, qy + qrSize + 38)
+  x.fillStyle = '#312e81'; x.font = '700 40px monospace'
+  x.fillText(pass.code, W / 2, qy + qrSize + 90)
+  x.textAlign = 'left'
+  // details grid (two columns)
+  const dy = headerH + qrBlockH + 20
+  details.forEach((d, i) => {
+    const cx = pad + (i % 2) * half
+    const cy = dy + Math.floor(i / 2) * rowH
+    x.fillStyle = '#94a3b8'; x.font = '600 13px sans-serif'; x.fillText(d[0], cx, cy)
+    x.fillStyle = '#1e293b'; x.font = '600 22px sans-serif'; x.fillText(String(d[1]), cx, cy + 28, half - 12)
+  })
+
+  const a = document.createElement('a')
+  a.href = c.toDataURL('image/png')
+  a.download = `ujjain-pass-${pass.code}.png`
+  document.body.appendChild(a); a.click(); a.remove()
+}
+
 export const VEHICLES = [
   { id: '2w', label: '2-Wheeler', icon: '🏍️' },
   { id: 'car', label: 'Car', icon: '🚗' },
