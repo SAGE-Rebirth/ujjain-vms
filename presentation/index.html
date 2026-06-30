@@ -1,0 +1,1239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Ujjain VMS — The Offline-First Entry Layer for Simhastha 2028</title>
+<style>
+/* ============================================================
+   UJJAIN VMS — Pitch Deck
+   Self-contained, zero-dependency, runs fully offline.
+   Theme: saffron (#f97316) + deep indigo (#312e81) + mandala.
+   ============================================================ */
+
+:root{
+  --saffron:#f97316;
+  --saffron-deep:#ea580c;
+  --gold:#fbbf24;
+  --indigo:#312e81;
+  --indigo-deep:#1e1b4b;
+  --ink:#0b1020;
+  --cream:#fff7ed;
+  --paper:#fffaf3;
+  --rose:#e11d48;
+  --emerald:#10b981;
+  --slate:#94a3b8;
+}
+
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+html,body{height:100%;}
+body{
+  font-family:'Inter Variable',system-ui,-apple-system,'Segoe UI',sans-serif;
+  background:var(--indigo-deep);
+  color:#0b1020;
+  overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+h1,h2,h3{font-weight:800;letter-spacing:-.02em;line-height:1.05;}
+.serif{font-family:Georgia,'Times New Roman',serif;}
+
+/* ---------- Deck shell ---------- */
+#deck{position:fixed;inset:0;}
+.slide{
+  position:absolute;inset:0;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:clamp(28px,5vw,90px);
+  padding-bottom:clamp(78px,9vh,112px);
+  opacity:0;visibility:hidden;
+  transform:translate3d(0,22px,0);
+  transition:opacity .5s cubic-bezier(.22,.61,.36,1), transform .5s cubic-bezier(.22,.61,.36,1);
+  background:
+    radial-gradient(1200px 700px at 80% -10%, rgba(249,115,22,.16), transparent 60%),
+    radial-gradient(900px 600px at 0% 110%, rgba(99,102,241,.22), transparent 60%),
+    linear-gradient(160deg,#fffaf3 0%, #fff2e0 55%, #ffe9d3 100%);
+  overflow:hidden;
+}
+.slide.dark{
+  background:
+    radial-gradient(1000px 700px at 78% -8%, rgba(251,191,36,.20), transparent 58%),
+    radial-gradient(900px 700px at -5% 108%, rgba(99,102,241,.30), transparent 60%),
+    linear-gradient(160deg,#1e1b4b 0%, #312e81 60%, #3b0764 100%);
+  color:#fff7ed;
+}
+.slide.active{opacity:1;visibility:visible;transform:none;z-index:2;}
+.slide.prev{transform:translate3d(0,-22px,0);}
+
+/* ---------- Mandala / yantra (inline SVG, rasterised once → composited, no per-frame repaint) ---------- */
+.mandala{
+  position:absolute;pointer-events:none;opacity:.12;color:var(--saffron);
+  will-change:transform;transform:translateZ(0);
+  animation:spin 120s linear infinite;
+}
+.mandala svg{display:block;width:100%;height:100%;}
+.mandala.m1{width:min(58vw,640px);aspect-ratio:1;top:-16%;right:-12%;color:var(--saffron);}
+.mandala.m2{width:min(46vw,500px);aspect-ratio:1;bottom:-18%;left:-12%;color:var(--indigo);
+  animation-direction:reverse;animation-duration:160s;}
+.dark .mandala{opacity:.15;}
+.dark .mandala.m1{color:var(--gold);}
+.dark .mandala.m2{color:#a5b4fc;}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+/* floating diya embers — transform-only, GPU composited */
+.diya{position:absolute;width:7px;height:7px;border-radius:50%;
+  background:radial-gradient(circle,#fff,#fbbf24 40%,transparent 70%);
+  box-shadow:0 0 16px 5px rgba(251,191,36,.5);
+  will-change:transform,opacity;
+  animation:floaty 8s ease-in-out infinite;pointer-events:none;opacity:.85;}
+@keyframes floaty{0%,100%{transform:translate3d(0,0,0)}50%{transform:translate3d(0,-24px,0)}}
+
+@media (prefers-reduced-motion: reduce){
+  .mandala,.diya,.dot,.live-dot{animation:none!important;}
+  .slide{transition:opacity .25s ease;}
+  *{scroll-behavior:auto!important;}
+}
+
+/* ---------- Reusable bits ---------- */
+.kicker{
+  display:inline-flex;align-items:center;gap:8px;
+  font-size:clamp(11px,1.1vw,14px);font-weight:700;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--saffron-deep);background:rgba(249,115,22,.12);
+  padding:7px 16px;border-radius:999px;border:1px solid rgba(249,115,22,.30);
+}
+.dark .kicker{color:var(--gold);background:rgba(251,191,36,.12);border-color:rgba(251,191,36,.30);}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--saffron);animation:pulse 1.6s infinite;}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+.title{font-size:clamp(34px,6.2vw,84px);}
+.subtitle{font-size:clamp(16px,2.2vw,26px);font-weight:500;opacity:.85;max-width:18ch;}
+.lead{font-size:clamp(16px,1.8vw,22px);line-height:1.5;max-width:60ch;opacity:.92;}
+.center{text-align:center;align-items:center;}
+.wrap{width:min(1180px,100%);position:relative;z-index:3;}
+
+.grid{display:grid;gap:clamp(14px,1.6vw,22px);width:100%;}
+.g2{grid-template-columns:repeat(2,1fr);}
+.g3{grid-template-columns:repeat(3,1fr);}
+.g4{grid-template-columns:repeat(4,1fr);}
+@media(max-width:880px){.g2,.g3,.g4{grid-template-columns:1fr;}}
+
+.card{
+  background:rgba(255,255,255,.82);border:1px solid rgba(49,46,129,.12);
+  border-radius:18px;padding:clamp(16px,1.8vw,26px);
+  box-shadow:0 10px 30px -18px rgba(30,27,75,.4);
+  transition:transform .32s cubic-bezier(.22,.61,.36,1), box-shadow .32s, border-color .32s;
+}
+.card:hover{transform:translateY(-5px);box-shadow:0 22px 44px -22px rgba(249,115,22,.55);border-color:rgba(249,115,22,.4);}
+.dark .card{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.14);}
+.card h3{font-size:clamp(17px,1.7vw,22px);margin-bottom:8px;}
+.card p{font-size:clamp(13px,1.25vw,16px);opacity:.82;line-height:1.5;}
+.card .ico{font-size:30px;margin-bottom:6px;display:block;}
+
+.pill{display:inline-block;font-size:13px;font-weight:700;padding:4px 12px;border-radius:999px;
+  background:rgba(16,185,129,.15);color:#047857;border:1px solid rgba(16,185,129,.3);}
+.pill.rose{background:rgba(225,29,72,.14);color:#be123c;border-color:rgba(225,29,72,.3);}
+.pill.gold{background:rgba(251,191,36,.18);color:#b45309;border-color:rgba(251,191,36,.4);}
+
+/* ---------- Navigation ---------- */
+#progress{position:fixed;top:0;left:0;height:4px;background:linear-gradient(90deg,var(--saffron),var(--gold));z-index:50;
+  width:0;transition:width .5s cubic-bezier(.22,.61,.36,1);box-shadow:0 0 12px rgba(251,191,36,.7);}
+#dots{position:fixed;right:18px;top:50%;transform:translateY(-50%);z-index:50;display:flex;flex-direction:column;gap:10px;}
+#dots button{width:11px;height:11px;border-radius:50%;border:2px solid rgba(120,120,140,.5);background:transparent;cursor:pointer;padding:0;transition:.25s;}
+#dots button.on{background:var(--saffron);border-color:var(--saffron);transform:scale(1.3);box-shadow:0 0 10px rgba(249,115,22,.8);}
+.nav-arrows{position:fixed;bottom:20px;right:22px;z-index:50;display:flex;gap:10px;}
+.nav-arrows button{
+  width:46px;height:46px;border-radius:14px;border:none;cursor:pointer;font-size:20px;
+  background:rgba(49,46,129,.9);color:#fff;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 8px 20px -8px rgba(0,0,0,.6);transition:.2s;}
+.nav-arrows button:hover{background:var(--saffron);transform:translateY(-2px);}
+.nav-arrows button:disabled{opacity:.3;cursor:default;transform:none;}
+#counter{position:fixed;bottom:26px;left:24px;z-index:50;white-space:nowrap;
+  font-size:12.5px;font-weight:700;color:rgba(90,90,110,.9);letter-spacing:.06em;
+  padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.5);border:1px solid rgba(120,120,140,.18);backdrop-filter:blur(6px);}
+.hint{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);z-index:50;white-space:nowrap;
+  font-size:12px;font-weight:600;color:rgba(90,90,110,.8);letter-spacing:.04em;
+  padding:6px 14px;border-radius:999px;background:rgba(255,255,255,.5);border:1px solid rgba(120,120,140,.18);backdrop-filter:blur(6px);}
+/* hide the centre hint before it can ever reach the counter / arrows */
+@media(max-width:880px){.hint{display:none;}}
+.dark ~ * {}
+
+/* ---------- Stats / counters ---------- */
+.stat{text-align:center;}
+.stat .num{font-size:clamp(34px,5vw,64px);font-weight:800;line-height:1;
+  background:linear-gradient(120deg,var(--saffron),var(--gold));-webkit-background-clip:text;background-clip:text;color:transparent;}
+.dark .stat .num{background:linear-gradient(120deg,var(--gold),#fff);-webkit-background-clip:text;background-clip:text;color:transparent;}
+.stat .lbl{font-size:clamp(12px,1.2vw,15px);font-weight:600;opacity:.8;margin-top:8px;}
+
+/* ---------- Architecture diagram ---------- */
+.arch{display:flex;flex-direction:column;align-items:center;gap:14px;width:100%;}
+.node-box{border:1.5px solid;border-radius:14px;padding:14px 18px;font-weight:600;text-align:center;position:relative;background:rgba(255,255,255,.06);}
+.cloud{border-color:var(--gold);color:var(--gold);min-width:280px;box-shadow:0 0 30px -6px rgba(251,191,36,.4);}
+.row{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;}
+.cp{border-color:#a5b4fc;color:#c7d2fe;min-width:150px;font-size:14px;}
+.syncline{width:2px;height:30px;background:linear-gradient(#fbbf24,transparent);position:relative;overflow:visible;}
+.syncline::after{content:'';position:absolute;left:-2px;width:6px;height:6px;border-radius:50%;background:var(--gold);box-shadow:0 0 8px var(--gold);animation:flow 2.2s linear infinite;}
+@keyframes flow{0%{top:0;opacity:1}100%{top:30px;opacity:0}}
+
+/* ---------- Live demo widget ---------- */
+.demo{display:flex;flex-direction:column;gap:14px;align-items:stretch;}
+.demo-screen{
+  border-radius:18px;padding:24px;text-align:center;font-weight:800;
+  font-size:clamp(28px,4vw,46px);letter-spacing:.04em;transition:.4s;
+  border:2px solid;min-height:150px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+}
+.demo-screen small{font-size:14px;font-weight:600;letter-spacing:.04em;opacity:.85;}
+.scr-idle{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.18);color:#cbd5e1;}
+.scr-admit{background:rgba(16,185,129,.18);border-color:var(--emerald);color:#6ee7b7;box-shadow:0 0 40px -8px rgba(16,185,129,.6);}
+.scr-deny{background:rgba(225,29,72,.18);border-color:var(--rose);color:#fda4af;box-shadow:0 0 40px -8px rgba(225,29,72,.6);}
+.controls{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;}
+.btn{border:none;cursor:pointer;font-weight:700;font-size:15px;padding:13px 22px;border-radius:13px;transition:.2s;color:#fff;}
+.btn:hover{transform:translateY(-2px);}
+.btn-scan{background:linear-gradient(120deg,var(--saffron),var(--saffron-deep));}
+.btn-net{background:#475569;}
+.btn-net.off{background:#7f1d1d;}
+.btn-lock{background:linear-gradient(120deg,#be123c,#881337);}
+.btn-reset{background:rgba(255,255,255,.16);}
+.netbadge{display:inline-flex;align-items:center;gap:7px;font-weight:700;font-size:14px;padding:7px 15px;border-radius:999px;}
+.net-on{background:rgba(16,185,129,.18);color:#6ee7b7;}
+.net-off{background:rgba(225,29,72,.2);color:#fda4af;}
+
+/* ---------- Capacity bars ---------- */
+.zonebar{display:flex;align-items:center;gap:12px;margin:7px 0;}
+.zonebar .nm{width:130px;font-size:13px;font-weight:600;text-align:right;opacity:.85;}
+.track{flex:1;height:18px;border-radius:999px;background:rgba(120,120,140,.2);overflow:hidden;}
+.fill{height:100%;border-radius:999px;width:0;transition:width 1.4s cubic-bezier(.22,.61,.36,1);
+  background:linear-gradient(90deg,var(--saffron),var(--gold));}
+.fill.hot{background:linear-gradient(90deg,#e11d48,#f97316);}
+.zonebar .pc{width:46px;font-size:13px;font-weight:700;text-align:left;}
+
+/* ---------- Revenue calculator ---------- */
+.calc{display:grid;grid-template-columns:1.1fr .9fr;gap:26px;align-items:center;}
+@media(max-width:880px){.calc{grid-template-columns:1fr;}}
+.slider-row{margin:18px 0;}
+.slider-row label{display:flex;justify-content:space-between;font-weight:700;font-size:15px;margin-bottom:8px;}
+.slider-row label b{color:var(--gold);}
+input[type=range]{width:100%;-webkit-appearance:none;height:7px;border-radius:999px;background:rgba(255,255,255,.18);outline:none;}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:24px;height:24px;border-radius:50%;
+  background:linear-gradient(120deg,var(--saffron),var(--gold));cursor:pointer;box-shadow:0 0 14px rgba(251,191,36,.7);border:2px solid #fff;}
+/* --- gamified kalash output --- */
+.gamebox{display:flex;flex-direction:column;align-items:center;gap:12px;position:relative;
+  padding:20px 18px 16px;border-radius:26px;
+  background:radial-gradient(120% 90% at 50% 22%,rgba(20,16,48,.72),rgba(20,16,48,.42) 72%,rgba(20,16,48,0));
+  box-shadow:inset 0 0 0 1px rgba(251,191,36,.14);}
+.odometer{font-size:clamp(40px,6.4vw,74px);font-weight:800;line-height:1;letter-spacing:-.01em;
+  font-variant-numeric:tabular-nums;
+  background:linear-gradient(120deg,var(--gold),#fff 55%,var(--gold));-webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 2px 16px rgba(251,191,36,.5));transition:transform .14s cubic-bezier(.34,1.56,.64,1);}
+.odometer.bump{transform:scale(1.09);}
+.odo-cap{font-size:12.5px;opacity:.78;font-weight:600;margin-top:-2px;text-align:center;}
+
+.kalash{position:relative;width:160px;height:206px;margin:2px 0;}
+.kalash-svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;z-index:2;
+  filter:drop-shadow(0 15px 20px rgba(120,53,15,.42));}
+.kalash-glow{position:absolute;left:50%;top:57%;width:165%;height:150%;transform:translate(-50%,-50%);
+  pointer-events:none;z-index:0;border-radius:50%;
+  background:radial-gradient(closest-side,rgba(251,191,36,.42),transparent 70%);opacity:.5;transition:opacity .6s;}
+.kalash.full .kalash-glow{opacity:1;animation:pulse 1.9s ease-in-out infinite;}
+/* molten gold level — a smooth group translate, never a reflowing height */
+.k-liquid{transition:transform .72s cubic-bezier(.22,.61,.36,1);will-change:transform;}
+.wl{will-change:transform;}
+.wl-front{animation:wlx 2.7s linear infinite;}
+.wl-back{animation:wlx 4.1s linear infinite reverse;}
+@keyframes wlx{from{transform:translateX(0)}to{transform:translateX(-40px)}}
+.kalash-pct{position:absolute;left:50%;top:61%;transform:translate(-50%,-50%);z-index:3;pointer-events:none;
+  font-weight:800;font-size:21px;color:#fff7e6;letter-spacing:.01em;
+  text-shadow:0 1px 2px rgba(92,40,6,.95),0 0 9px rgba(120,53,15,.85);}
+/* CSS-drawn gold coin — consistent colour, perfectly round, no emoji-font variance */
+.coin{position:absolute;width:17px;height:17px;border-radius:50%;pointer-events:none;z-index:5;
+  background:radial-gradient(circle at 34% 28%, #fffbeb 0%, #fde047 36%, #f59e0b 72%, #b45309 100%);
+  border:1px solid #d97706;
+  box-shadow:0 0 10px rgba(251,191,36,.7), inset 0 -2px 3px rgba(146,64,14,.6), inset 0 2px 2px rgba(255,255,255,.55);
+  transform-origin:center;will-change:transform,opacity;
+  animation:coinUp 1.05s cubic-bezier(.33,0,.4,1) forwards;}
+.coin::before{content:'';position:absolute;inset:3px;border-radius:50%;border:1px solid rgba(146,64,14,.45);}
+@keyframes coinUp{
+  0%  {opacity:0;transform:translate3d(0,6px,0)   scale(.45)}
+  18% {opacity:1;transform:translate3d(0,-14px,0) scale(1)}
+  100%{opacity:0;transform:translate3d(0,-94px,0) scale(.92)}
+}
+
+.miles{display:flex;gap:5px;justify-content:center;width:100%;}
+.mile{flex:1;min-width:0;text-align:center;opacity:.38;transition:.45s;filter:grayscale(.85);}
+.mile.lit{opacity:1;filter:none;transform:translateY(-3px);}
+.mile .lamp{font-size:20px;line-height:1;display:block;}
+.mile.lit .lamp{filter:drop-shadow(0 0 9px rgba(251,191,36,.95));animation:flicker 1.5s infinite;}
+@keyframes flicker{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.84;transform:scale(.93)}}
+.mile .ml{font-size:11px;font-weight:800;display:block;margin-top:1px;color:var(--gold);}
+.mile.lit .ml{color:var(--gold);}
+.mile:not(.lit) .ml{color:#cbd5e1;}
+.mile .mc{font-size:9.5px;opacity:.72;display:block;line-height:1.15;}
+
+.impact-live{font-size:14px;font-weight:600;text-align:left;background:rgba(255,255,255,.06);
+  border:1px solid rgba(251,191,36,.3);border-radius:13px;padding:12px 15px;margin-top:18px;line-height:1.5;}
+.impact-live b{color:var(--gold);}
+
+.streams{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;}
+@media(max-width:880px){.streams{grid-template-columns:1fr;}}
+.stream{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.13);border-radius:14px;padding:14px 16px;}
+.stream b{color:var(--gold);font-size:15px;}
+.stream span{display:block;font-size:13px;opacity:.78;margin-top:4px;line-height:1.45;}
+
+ul.clean{list-style:none;display:flex;flex-direction:column;gap:12px;}
+ul.clean li{display:flex;gap:12px;font-size:clamp(14px,1.5vw,18px);line-height:1.45;align-items:flex-start;}
+ul.clean li::before{content:'';flex:none;width:10px;height:10px;border-radius:50%;margin-top:7px;
+  background:linear-gradient(120deg,var(--saffron),var(--gold));box-shadow:0 0 8px rgba(249,115,22,.6);}
+
+.flow-steps{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;justify-content:center;}
+.step{flex:1;min-width:140px;text-align:center;padding:18px 12px;position:relative;}
+.step .n{width:42px;height:42px;border-radius:50%;margin:0 auto 10px;display:flex;align-items:center;justify-content:center;
+  font-weight:800;color:#fff;background:linear-gradient(120deg,var(--saffron),var(--saffron-deep));box-shadow:0 8px 18px -8px rgba(249,115,22,.7);}
+.step .t{font-weight:700;font-size:15px;margin-bottom:4px;}
+.step .d{font-size:12.5px;opacity:.75;}
+.step:not(:last-child)::after{content:'→';position:absolute;right:-8px;top:32px;color:var(--saffron);font-size:22px;font-weight:800;}
+@media(max-width:880px){.step:not(:last-child)::after{display:none;}}
+
+.fade{opacity:0;transform:translateY(20px);transition:opacity .6s,transform .6s;}
+.slide.active .fade{opacity:1;transform:none;}
+.slide.active .fade.d1{transition-delay:.12s}
+.slide.active .fade.d2{transition-delay:.24s}
+.slide.active .fade.d3{transition-delay:.36s}
+.slide.active .fade.d4{transition-delay:.48s}
+.slide.active .fade.d5{transition-delay:.6s}
+
+.quote{font-family:Georgia,serif;font-style:italic;font-size:clamp(20px,3vw,34px);line-height:1.4;max-width:24ch;}
+.author{font-size:14px;font-weight:700;opacity:.7;letter-spacing:.05em;text-transform:uppercase;margin-top:18px;}
+
+.badge-row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;}
+.tag{font-size:12.5px;font-weight:700;padding:7px 14px;border-radius:999px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);}
+.dark .tag{color:#e0e7ff;}
+
+/* ============ Animated demand-spike chart (slide: The Problem) ============ */
+/* Single clip-path wipe reveals the whole chart left-to-right — never a half state. */
+.dchart{width:100%;max-width:780px;margin:0 auto 24px;}
+.dchart svg{width:100%;height:auto;display:block;overflow:visible;
+  clip-path:inset(0 100% 0 0);transition:clip-path 1.3s cubic-bezier(.4,0,.2,1);}
+.dchart.draw svg{clip-path:inset(0 -3% 0 0);}
+.dline{fill:none;stroke:var(--saffron);stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round;}
+.darea{fill:url(#dgrad);}
+.dceil{stroke:var(--rose);stroke-width:2;stroke-dasharray:6 6;opacity:.65;}
+.dband{fill:rgba(225,29,72,.13);}
+.dmark>circle{fill:var(--rose);}
+.dmark .ping{fill:none;stroke:var(--rose);stroke-width:2;transform-box:fill-box;transform-origin:center;
+  animation:ping 1.9s ease-out 1.1s 4;}
+@keyframes ping{0%{transform:scale(.5);opacity:.85}100%{transform:scale(1.8);opacity:0}}
+.dlabel{font:700 13px 'Inter Variable',sans-serif;fill:#be123c;}
+.dcap{font:700 12px 'Inter Variable',sans-serif;fill:#be123c;opacity:.85;}
+.daxis{font:600 11px 'Inter Variable',sans-serif;fill:#94a3b8;}
+
+/* ============ Animated TAM bar chart (slide: The Bigger Market) ============ */
+.tam{width:min(840px,100%);margin:8px auto 0;display:flex;flex-direction:column;gap:11px;text-align:left;}
+.tam-row{display:grid;grid-template-columns:182px 1fr 78px;align-items:center;gap:14px;}
+.tam-lbl{font-size:13.5px;font-weight:700;text-align:right;opacity:.9;line-height:1.2;}
+.tam-lbl small{font-weight:600;opacity:.6;}
+.tam-track{height:24px;border-radius:9px;background:rgba(49,46,129,.1);overflow:hidden;}
+.tam-bar{height:100%;width:0;border-radius:9px;background:linear-gradient(90deg,var(--saffron),var(--gold));
+  box-shadow:0 0 16px -3px rgba(249,115,22,.5);transition:width 1.1s cubic-bezier(.22,.61,.36,1);}
+.tam-bar.proof{background:linear-gradient(90deg,#4f46e5,#a5b4fc);box-shadow:0 0 16px -3px rgba(99,102,241,.5);}
+.tam-val{font-size:15px;font-weight:800;color:var(--saffron-deep);}
+.tam-row.proof .tam-val{color:#4338ca;}
+.tam-total{margin-top:6px;font-size:clamp(15px,1.8vw,20px);font-weight:700;}
+.tam-total b{font-weight:800;background:linear-gradient(120deg,var(--saffron-deep),var(--saffron));-webkit-background-clip:text;background-clip:text;color:transparent;}
+.tam-cap{font-size:12px;opacity:.6;margin-top:2px;}
+@media(max-width:880px){.tam-row{grid-template-columns:104px 1fr 56px;gap:9px;}.tam-lbl{font-size:11px;}.tam-lbl small{display:none;}}
+
+/* ============ Interactive: 7-zone yantra ring (slide: Where We Fit) ============ */
+.zr{display:grid;grid-template-columns:1.05fr .95fr;gap:30px;align-items:center;}
+@media(max-width:880px){.zr{grid-template-columns:1fr;}}
+.zr-ring{position:relative;width:min(78vw,420px);aspect-ratio:1;margin:0 auto;}
+.zr-ring svg.spokes{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;}
+.zr-ring svg.spokes line{stroke:rgba(148,163,184,.35);stroke-width:1.5;transition:stroke .3s,stroke-width .3s;}
+.zr-ring svg.spokes line.on{stroke:var(--saffron);stroke-width:2.5;filter:drop-shadow(0 0 4px rgba(249,115,22,.7));}
+.zr-core{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:30%;aspect-ratio:1;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:radial-gradient(circle at 50% 35%,#fde68a,var(--saffron) 70%,#b45309);
+  color:#3b0764;font-weight:800;text-align:center;line-height:1.05;z-index:3;
+  box-shadow:0 0 0 6px rgba(251,191,36,.18),0 0 40px -4px rgba(249,115,22,.7);}
+.zr-core span{font-size:clamp(9px,1.5vw,13px);}
+.zr-core small{font-size:9px;font-weight:700;opacity:.75;}
+.zr-node{position:absolute;width:64px;height:64px;margin:-32px 0 0 -32px;border-radius:50%;cursor:pointer;
+  border:2px solid rgba(165,180,252,.5);background:rgba(255,255,255,.08);color:#e0e7ff;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;z-index:4;
+  transition:transform .3s cubic-bezier(.34,1.56,.64,1),border-color .3s,background .3s,box-shadow .3s;}
+.zr-node .zn-ico{font-size:18px;line-height:1;}
+.zr-node .zn-id{font-size:9px;font-weight:800;letter-spacing:.03em;}
+.zr-node:hover{transform:scale(1.08);border-color:var(--gold);}
+.zr-node.sel{transform:scale(1.16);border-color:var(--gold);background:linear-gradient(150deg,var(--saffron),#b45309);color:#fff;
+  box-shadow:0 0 26px -2px rgba(249,115,22,.85);}
+.zr-panel{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);border-radius:18px;padding:22px 24px;min-height:230px;}
+.zr-panel h3{font-size:clamp(20px,2.4vw,28px);margin-bottom:4px;}
+.zr-panel .zr-road{font-size:13px;font-weight:700;color:var(--gold);letter-spacing:.04em;text-transform:uppercase;margin-bottom:14px;}
+.zr-meter{height:14px;border-radius:999px;background:rgba(120,120,140,.25);overflow:hidden;margin:6px 0 4px;}
+.zr-meter i{display:block;height:100%;border-radius:999px;width:0;background:linear-gradient(90deg,var(--saffron),var(--gold));transition:width .7s cubic-bezier(.22,.61,.36,1);}
+.zr-meter i.hot{background:linear-gradient(90deg,#e11d48,#f97316);}
+.zr-row{display:flex;justify-content:space-between;font-size:13px;font-weight:600;opacity:.85;margin-top:10px;}
+.zr-hint{font-size:12px;opacity:.6;margin-top:14px;}
+
+/* ============ Interactive: architecture network toggle (slide: Architecture) ============ */
+.ar-toggle{display:inline-flex;align-items:center;gap:10px;border:none;cursor:pointer;
+  font-weight:700;font-size:15px;padding:12px 22px;border-radius:13px;color:#fff;
+  background:linear-gradient(120deg,#be123c,#7f1d1d);transition:transform .2s,filter .2s;}
+.ar-toggle:hover{transform:translateY(-2px);filter:brightness(1.1);}
+.ar-toggle.up{background:linear-gradient(120deg,#059669,#047857);}
+.syncline{transition:opacity .4s;}
+.severed .syncline{opacity:.12;}
+.severed .syncline::after{animation:none;opacity:0;}
+.ar-cut{position:relative;display:inline-flex;align-items:center;justify-content:center;
+  font-size:12px;font-weight:800;letter-spacing:.05em;padding:4px 12px;border-radius:999px;opacity:0;
+  height:0;overflow:hidden;transition:opacity .4s,height .4s,margin .4s;
+  background:rgba(225,29,72,.2);color:#fda4af;border:1px solid rgba(225,29,72,.45);}
+.severed .ar-cut{opacity:1;height:auto;padding:5px 12px;margin:2px 0;}
+.node-box .ar-state{display:block;font-size:10.5px;font-weight:800;letter-spacing:.04em;margin-top:5px;
+  color:#6ee7b7;opacity:0;max-height:0;overflow:hidden;transition:opacity .4s,max-height .4s;}
+.severed .node-box.cp .ar-state{opacity:1;max-height:20px;}
+.severed .node-box.cp{border-color:#34d399;box-shadow:0 0 26px -6px rgba(16,185,129,.55);}
+.severed .node-box.cloud{opacity:.45;filter:grayscale(.5);}
+
+/* ============ Interactive: booking phone stepper (slide: Booking Flow) ============ */
+.bk{display:grid;grid-template-columns:1.15fr .85fr;gap:30px;align-items:center;}
+@media(max-width:880px){.bk{grid-template-columns:1fr;}.bk-phone{margin:0 auto;}}
+.bk-steps{display:flex;flex-direction:column;gap:9px;}
+.bk-step{display:flex;align-items:center;gap:13px;cursor:pointer;border:1px solid transparent;border-radius:13px;
+  padding:11px 15px;background:rgba(255,255,255,.05);transition:.28s;text-align:left;color:inherit;font:inherit;}
+.bk-step:hover{background:rgba(255,255,255,.09);}
+.bk-step.on{background:linear-gradient(100deg,rgba(249,115,22,.22),rgba(251,191,36,.08));border-color:rgba(249,115,22,.5);}
+.bk-step.done .bk-n{background:linear-gradient(120deg,#059669,#047857);}
+.bk-n{flex:none;width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-weight:800;font-size:14px;color:#fff;background:rgba(255,255,255,.16);transition:.28s;}
+.bk-step.on .bk-n{background:linear-gradient(120deg,var(--saffron),var(--saffron-deep));box-shadow:0 6px 16px -6px rgba(249,115,22,.8);}
+.bk-tt{font-weight:700;font-size:15px;}
+.bk-dd{font-size:12px;opacity:.7;}
+.bk-ctrl{display:flex;gap:10px;margin-top:6px;}
+.bk-ctrl button{border:none;cursor:pointer;font-weight:700;font-size:13px;padding:9px 16px;border-radius:11px;color:#fff;transition:.2s;}
+.bk-ctrl button:hover{transform:translateY(-2px);}
+.bk-play{background:linear-gradient(120deg,var(--saffron),var(--saffron-deep));}
+.bk-reset{background:rgba(255,255,255,.16);}
+
+.bk-phone{width:268px;border-radius:34px;padding:13px;background:linear-gradient(160deg,#0b1020,#1e1b4b);
+  border:1px solid rgba(255,255,255,.14);box-shadow:0 30px 60px -24px rgba(0,0,0,.7),inset 0 0 0 2px rgba(255,255,255,.04);}
+.bk-screen{position:relative;border-radius:24px;overflow:hidden;height:440px;background:#fffaf3;color:#1e293b;display:flex;flex-direction:column;}
+.bk-notch{position:absolute;top:8px;left:50%;transform:translateX(-50%);width:90px;height:6px;border-radius:999px;background:rgba(0,0,0,.25);z-index:5;}
+.bk-top{padding:22px 18px 12px;background:linear-gradient(120deg,var(--saffron),#b45309);color:#fff;}
+.bk-top .bk-app{font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;opacity:.9;}
+.bk-top .bk-h{font-size:18px;font-weight:800;margin-top:3px;}
+.bk-body{flex:1;padding:16px 16px 14px;overflow:hidden;}
+.bk-body .row{display:flex;align-items:center;gap:10px;padding:11px 13px;border-radius:12px;border:1.5px solid #e7d9c5;margin-bottom:9px;font-size:13.5px;font-weight:600;background:#fff;transition:.25s;}
+.bk-body .row.pick{border-color:var(--saffron);background:#fff7ed;box-shadow:0 6px 16px -10px rgba(249,115,22,.7);}
+.bk-body .row .tick{margin-left:auto;color:var(--saffron-deep);font-weight:800;}
+.bk-mini{height:8px;border-radius:999px;background:#eee3d3;overflow:hidden;margin-top:5px;}
+.bk-mini i{display:block;height:100%;background:linear-gradient(90deg,var(--saffron),var(--gold));}
+.bk-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+.bk-slot{text-align:center;font-size:12px;font-weight:700;padding:10px 4px;border-radius:10px;border:1.5px solid #e7d9c5;background:#fff;}
+.bk-slot.pick{border-color:var(--saffron);background:var(--saffron);color:#fff;}
+.bk-slot.full{opacity:.4;text-decoration:line-through;}
+.bk-veh{display:flex;gap:9px;}
+.bk-veh div{flex:1;text-align:center;padding:14px 4px;border-radius:12px;border:1.5px solid #e7d9c5;font-size:12px;font-weight:700;}
+.bk-veh div.pick{border-color:var(--saffron);background:#fff7ed;}
+.bk-veh .em{font-size:22px;display:block;}
+.bk-plate{margin-top:12px;text-align:center;font-family:'Courier New',monospace;font-weight:800;font-size:17px;letter-spacing:.12em;
+  border:2px dashed #94a3b8;border-radius:10px;padding:9px;background:#f8fafc;}
+.bk-pay{margin-top:6px;text-align:center;}
+.bk-pay .amt{font-size:30px;font-weight:800;color:#1e293b;}
+.bk-paybtn{margin-top:14px;width:100%;border:none;border-radius:12px;padding:14px;font-weight:800;font-size:15px;color:#fff;cursor:pointer;
+  background:linear-gradient(120deg,#5b21b6,#7c3aed);transition:.25s;}
+.bk-payok{background:linear-gradient(120deg,#059669,#047857)!important;}
+.bk-qr{width:150px;height:150px;margin:6px auto 0;display:grid;gap:2px;padding:9px;background:#fff;border-radius:12px;
+  box-shadow:0 10px 26px -14px rgba(0,0,0,.5);}
+.bk-qr i{background:#0b1020;border-radius:1px;animation:qrpop .3s both;}
+.bk-qr i.off{background:transparent;animation:none;}
+@keyframes qrpop{from{opacity:0;transform:scale(.4)}to{opacity:1;transform:scale(1)}}
+.bk-code{text-align:center;margin-top:12px;font-size:12px;font-weight:700;color:#475569;}
+.bk-code b{display:inline-block;font-family:'Courier New',monospace;font-size:18px;letter-spacing:.22em;color:#1e293b;
+  background:#fff;border:1.5px solid #e7d9c5;border-radius:8px;padding:4px 12px;margin-top:5px;}
+.bk-fade{animation:bkfade .35s both;}
+@keyframes bkfade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<div id="progress"></div>
+<div id="deck"></div>
+
+<div id="dots"></div>
+<div id="counter"></div>
+<div class="hint">← → / Space · click dots · swipe</div>
+<div class="nav-arrows">
+  <button id="prev" aria-label="Previous">‹</button>
+  <button id="next" aria-label="Next">›</button>
+</div>
+
+<!-- ====================== SLIDES (authored as templates) ====================== -->
+<script id="slides" type="text/template">
+
+<!-- 1. TITLE -->
+<section class="slide dark center" data-name="Title">
+  <span class="mandala m1"></span><span class="mandala m2"></span>
+  <div class="wrap center" style="display:flex;flex-direction:column;align-items:center;gap:22px;">
+    <span class="kicker fade"><span class="dot"></span> Ujjain Smart City · Simhastha 2028</span>
+    <h1 class="title fade d1">Ujjain <span class="serif" style="color:var(--gold)">Vehicle Management System</span></h1>
+    <p class="subtitle fade d2" style="max-width:34ch">The offline-first booking + checkpoint layer for peak-load vehicle entry — built to work when the network doesn't.</p>
+    <div class="badge-row fade d3" style="margin-top:8px">
+      <span class="tag">📴 Works at zero internet</span>
+      <span class="tag">🔐 Cryptographically signed passes</span>
+      <span class="tag">🛑 Instant lockdown</span>
+      <span class="tag">💳 UPI-native</span>
+    </div>
+    <p class="fade d4" style="opacity:.6;font-size:13px;margin-top:14px;letter-spacing:.05em">A working Phase-0 prototype · Abhinav Pavithran</p>
+  </div>
+</section>
+
+<!-- 2. PROBLEM -->
+<section class="slide" data-name="The Problem">
+  <span class="mandala m1"></span>
+  <div class="wrap">
+    <span class="kicker fade">The Problem</span>
+    <h2 class="fade d1" style="font-size:clamp(26px,4vw,46px);margin:12px 0 16px">Demand is <span style="color:var(--saffron-deep)">predictable in advance</span> but <span style="color:var(--rose)">chaotic in the moment.</span></h2>
+    <div class="dchart fade d2" id="demandChart">
+      <svg viewBox="0 0 740 212" role="img" aria-label="Vehicle inflow spikes past network capacity at the peak bathing hour">
+        <defs><linearGradient id="dgrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#f97316" stop-opacity=".42"/><stop offset="1" stop-color="#f97316" stop-opacity="0"/>
+        </linearGradient></defs>
+        <rect class="dband" x="212" y="6" width="186" height="180" rx="6"/>
+        <path class="darea" d="M0,176 L70,170 L140,162 L200,150 L240,128 L270,80 L300,30 L335,80 L380,126 L450,151 L540,163 L640,168 L740,171 L740,186 L0,186 Z"/>
+        <line class="dceil" x1="0" y1="112" x2="740" y2="112"/>
+        <text class="dcap" x="4" y="105">cell-tower + power capacity ceiling</text>
+        <path class="dline" pathLength="1" d="M0,176 L70,170 L140,162 L200,150 L240,128 L270,80 L300,30 L335,80 L380,126 L450,151 L540,163 L640,168 L740,171"/>
+        <g class="dmark">
+          <circle class="ping" cx="300" cy="30" r="11"/>
+          <circle cx="300" cy="30" r="5.5"/>
+          <text class="dlabel" x="300" y="18" text-anchor="middle">Peak Shahi Snan hour — towers saturate</text>
+        </g>
+        <text class="daxis" x="0" y="207">04:00</text>
+        <text class="daxis" x="262" y="207">08:00 · bathing peak</text>
+        <text class="daxis" x="690" y="207">12:00</text>
+      </svg>
+    </div>
+    <div class="grid g3">
+      <div class="card fade d2"><span class="ico">🌊</span><h3>Bursty, extreme inflow</h3><p>Simhastha is planned around <b>2.5 crore</b> devotees on a single peak bathing day. Routine VIP movement adds year-round spikes.</p></div>
+      <div class="card fade d3"><span class="ico">📡</span><h3>The network dies first</h3><p>The same crowd density that creates the traffic jam also <b>saturates cell towers and strains power</b> at temporary checkpoints — exactly when you need them.</p></div>
+      <div class="card fade d4"><span class="ico">⚠️</span><h3>The fatal assumption</h3><p>Any system that assumes <i>"the internet will be up when I need it most"</i> fails at the precise moment it matters. That's the design constraint — not an edge case.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 3. PRAYAGRAJ PRECEDENT -->
+<section class="slide dark center" data-name="The Lesson">
+  <span class="mandala m2"></span>
+  <div class="wrap center" style="display:flex;flex-direction:column;align-items:center;gap:18px">
+    <span class="kicker fade">Learning from Maha Kumbh 2025</span>
+    <p class="quote fade d1">"After the Mauni Amavasya stampede, the administration's emergency move was to instantly cancel <span style="color:var(--gold)">every vehicle pass — including VVIP</span> — implemented by people physically on the ground, not from a control-room dashboard."</p>
+    <p class="author fade d2">— Prayagraj, January 2025</p>
+    <div class="card fade d3" style="max-width:62ch;margin-top:14px;background:rgba(225,29,72,.12);border-color:rgba(225,29,72,.35)">
+      <p style="font-size:clamp(14px,1.5vw,18px)"><b style="color:var(--gold)">The implication:</b> a digital system that needs the internet to <i>stop</i> admitting vehicles is dangerous. Revocation must propagate offline — and a human with a barrier must always be the final kill switch.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 4. WHERE WE FIT -->
+<section class="slide" data-name="Where We Fit">
+  <span class="mandala m1"></span>
+  <div class="wrap">
+    <span class="kicker fade">The 7 Approach Zones · tap a road</span>
+    <h2 class="fade d1" style="font-size:clamp(24px,3.6vw,42px);margin:12px 0 6px">Seven self-contained zones radiating from the <span style="color:var(--saffron-deep)">temple core.</span></h2>
+    <p class="fade d2" style="opacity:.82;margin-bottom:20px;max-width:74ch">No single chokepoint — each approach road has its own parking, gates and capacity. Our booking + checkpoint layer feeds the state's Simhastha command centre (PM Gati Shakti · BISAG-N · Sahayak) rather than replacing it.</p>
+    <div class="zr fade d3">
+      <div class="zr-ring" id="zrRing">
+        <svg class="spokes" id="zrSpokes" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+        <div class="zr-core">🛕<span>Mahakal<br>City Core</span><small>Shipra ghats</small></div>
+        <button class="zr-node" data-i="0" data-road="Indore Road" data-pc="92" data-mix="Cars 64% · 2-wheelers 28% · Bus 8%"><span class="zn-ico">🛣️</span><span class="zn-id">Z1</span></button>
+        <button class="zr-node" data-i="1" data-road="Dewas Road" data-pc="78" data-mix="Cars 58% · 2-wheelers 34% · Bus 8%"><span class="zn-ico">🛣️</span><span class="zn-id">Z2</span></button>
+        <button class="zr-node" data-i="2" data-road="Unhel Road" data-pc="54" data-mix="2-wheelers 51% · Cars 41% · Bus 8%"><span class="zn-ico">🛣️</span><span class="zn-id">Z3</span></button>
+        <button class="zr-node" data-i="3" data-road="Badnagar Road" data-pc="41" data-mix="2-wheelers 49% · Cars 43% · Bus 8%"><span class="zn-ico">🛣️</span><span class="zn-id">Z4</span></button>
+        <button class="zr-node" data-i="4" data-road="Agar Road" data-pc="33" data-mix="Cars 55% · 2-wheelers 37% · Bus 8%"><span class="zn-ico">🛣️</span><span class="zn-id">Z5</span></button>
+        <button class="zr-node" data-i="5" data-road="Maksi Road" data-pc="60" data-mix="Buses 22% · Cars 46% · 2-wheelers 32%"><span class="zn-ico">🛣️</span><span class="zn-id">Z6</span></button>
+        <button class="zr-node" data-i="6" data-road="Ramghat Approach" data-pc="99" data-mix="Pedestrian-priority · drop-off only"><span class="zn-ico">🛕</span><span class="zn-id">Z7</span></button>
+      </div>
+      <div class="zr-panel">
+        <h3 id="zrName">Indore Road</h3>
+        <div class="zr-road" id="zrRoadLbl">Zone 1 · Northern approach</div>
+        <div style="font-size:13px;font-weight:700;opacity:.8;margin-bottom:4px">Slot fill — peak bathing day</div>
+        <div class="zr-meter"><i id="zrFill"></i></div>
+        <div class="zr-row"><span id="zrPcLbl">92% booked</span><span id="zrStatus">⚠ near capacity → overflow armed</span></div>
+        <div class="zr-row" style="opacity:.7;font-weight:600"><span>Vehicle mix</span></div>
+        <div style="font-size:13px;opacity:.85;margin-top:2px" id="zrMix">Cars 64% · 2-wheelers 28% · Bus 8%</div>
+        <div class="zr-hint">When a zone fills, new bookings auto-cascade to the next road — the same inventory primitive as “sold-out, try the next show.”</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 5. ARCHITECTURE -->
+<section class="slide dark" data-name="Architecture">
+  <span class="mandala m1"></span>
+  <div class="wrap">
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap">
+      <div>
+        <span class="kicker fade">System Architecture · try cutting the link</span>
+        <h2 class="fade d1" style="font-size:clamp(22px,3.4vw,40px);margin:12px 0 6px">The gate owns enough trust to decide <span style="color:var(--gold)">on its own.</span></h2>
+      </div>
+      <button class="ar-toggle fade d1" id="arToggle">✂ Cut the network</button>
+    </div>
+    <div class="arch" id="archDiag" style="margin-top:14px">
+      <div class="node-box cloud fade d1">☁️ CENTRAL COMMAND DASHBOARD<br><small style="font-weight:400;opacity:.8">capacity · VIP schedule · analytics · 🛑 LOCKDOWN BROADCAST</small></div>
+      <div class="syncline fade d2"></div>
+      <div class="ar-cut">✂ LINK DOWN — NO SIGNAL</div>
+      <div style="font-size:12px;opacity:.7;font-weight:600" class="fade d2" id="arSyncLbl">syncs opportunistically — batched, not real-time</div>
+      <div class="row fade d3" style="margin-top:6px">
+        <div class="node-box cp">🛡️ NODE · Indore Rd<br><small style="opacity:.7">SQLite · offline QR verify</small><span class="ar-state">✓ STILL ADMITTING</span></div>
+        <div class="node-box cp">🛡️ NODE · Dewas Rd<br><small style="opacity:.7">stands alone, indefinitely</small><span class="ar-state">✓ STILL ADMITTING</span></div>
+        <div class="node-box cp">🛡️ NODE · Ramghat<br><small style="opacity:.7">Ed25519 + local cache</small><span class="ar-state">✓ STILL ADMITTING</span></div>
+      </div>
+      <div class="syncline fade d4" style="transform:scaleY(-1)"></div>
+      <div class="node-box fade d4" style="border-color:var(--saffron);color:var(--saffron);min-width:300px">📱 CITIZEN BOOKING · App / Web / SMS<br><small style="font-weight:400;opacity:.8">pick zone → slot → vehicle → UPI → signed QR</small></div>
+    </div>
+    <p class="fade d5 center" id="arCaption" style="margin-top:18px;font-size:14px;opacity:.7;max-width:72ch;margin-left:auto;margin-right:auto">Same trust model as a FASTag toll plaza or an airline boarding pass: transactions batch up and sync when a link appears. Nothing riskier than what NHAI already runs nationally.</p>
+  </div>
+</section>
+
+<!-- 6. BOOKING FLOW -->
+<section class="slide" data-name="Booking Flow">
+  <span class="mandala m2"></span>
+  <div class="wrap">
+    <span class="kicker fade">The "BookMyShow" Layer · walk through a booking</span>
+    <h2 class="fade d1" style="font-size:clamp(24px,3.6vw,42px);margin:12px 0 4px">People already know how to use it.</h2>
+    <p class="fade d2" style="opacity:.78;margin-bottom:18px;max-width:70ch">Don't innovate on UX — innovate on the backend. <b>Slot the demand; don't let it free-for-all.</b> Step through it on the right.</p>
+    <div class="bk fade d3">
+      <div>
+        <div class="bk-steps" id="bkSteps">
+          <button class="bk-step on" data-s="0"><span class="bk-n">1</span><span><span class="bk-tt">Pick event &amp; date</span><br><span class="bk-dd">Shahi Snan · 14 Jan 2028</span></span></button>
+          <button class="bk-step" data-s="1"><span class="bk-n">2</span><span><span class="bk-tt">Pick entry zone</span><br><span class="bk-dd">live capacity fill-bars</span></span></button>
+          <button class="bk-step" data-s="2"><span class="bk-n">3</span><span><span class="bk-tt">Pick time slot</span><br><span class="bk-dd">30-minute arrival windows</span></span></button>
+          <button class="bk-step" data-s="3"><span class="bk-n">4</span><span><span class="bk-tt">Vehicle &amp; plate</span><br><span class="bk-dd">plate is bound into the pass</span></span></button>
+          <button class="bk-step" data-s="4"><span class="bk-n">5</span><span><span class="bk-tt">Pay via UPI</span><br><span class="bk-dd">the cheapest universal rail</span></span></button>
+          <button class="bk-step" data-s="5"><span class="bk-n">6</span><span><span class="bk-tt">Signed QR + SMS code</span><br><span class="bk-dd">offline-verifiable ticket</span></span></button>
+        </div>
+        <div class="bk-ctrl">
+          <button class="bk-play" id="bkPlay">▶ Play the booking</button>
+          <button class="bk-reset" id="bkReset">↺ Restart</button>
+        </div>
+        <p style="font-size:12.5px;opacity:.7;margin-top:14px;max-width:46ch;line-height:1.5"><b style="color:var(--gold)">Anti-tout by design:</b> phone-OTP caps bookings per number, the plate is signed into the QR, and the 6-char SMS code admits even on a ₹2,000 phone.</p>
+      </div>
+      <div class="bk-phone">
+        <div class="bk-screen" id="bkScreen"><div class="bk-notch"></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 7. LIVE OFFLINE DEMO -->
+<section class="slide dark" data-name="Live Demo">
+  <span class="mandala m1"></span>
+  <div class="wrap">
+    <span class="kicker fade"><span class="dot"></span> Interactive · try it</span>
+    <h2 class="fade d1" style="font-size:clamp(24px,3.6vw,42px);margin:12px 0 6px">The checkpoint that survives a blackout</h2>
+    <p class="fade d2" style="opacity:.82;margin-bottom:20px;max-width:64ch">Admit, deny, and log a vehicle in under 5 seconds — <b>with or without signal.</b> Cut the network and scan a pass. Then hit lockdown and watch it deny <i>even while offline.</i></p>
+    <div class="grid g2" style="align-items:start">
+      <div class="demo fade d3">
+        <div class="netbadge net-on" id="netBadge">🟢 NETWORK: ONLINE</div>
+        <div id="demoScreen" class="demo-screen scr-idle">READY<small>Indore Rd · Gate 1 · awaiting scan</small></div>
+        <div class="controls">
+          <button class="btn btn-scan" id="bScan">📷 Scan a valid pass</button>
+          <button class="btn btn-net" id="bNet">📴 Cut network</button>
+          <button class="btn btn-lock" id="bLock">🛑 Lockdown</button>
+          <button class="btn btn-reset" id="bReset">↺ Reset</button>
+        </div>
+      </div>
+      <div class="fade d4">
+        <ul class="clean">
+          <li><b>Signature, not lookup.</b>&nbsp;The QR is Ed25519-signed at issue; the gate holds only the public key. Maths verifies it — no phone-home.</li>
+          <li><b>Soft-green admit.</b>&nbsp;A pass bought 5 minutes ago that this gate never synced still verifies offline, flagged to reconcile later.</li>
+          <li><b>Lockdown propagates offline.</b>&nbsp;Revoke-everything rides the next sync — and a constable can flip "deny-all" with zero system input.</li>
+          <li><b>Every decision is logged</b>&nbsp;to local SQLite. Nothing is lost if the network never returns that day.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 8. CAPACITY / OPS -->
+<section class="slide" data-name="Live Capacity">
+  <span class="mandala m2"></span>
+  <div class="wrap">
+    <span class="kicker fade">Command Centre · Live Operations</span>
+    <h2 class="fade d1" style="font-size:clamp(24px,3.6vw,44px);margin:12px 0 8px">Inventory management, applied to a city.</h2>
+    <p class="lead fade d2" style="margin-bottom:22px">Capacity per zone per slot is the same primitive as "seats per showtime." When a zone fills, overflow auto-cascades to the next. <b>Staleness is never hidden — that's a safety feature.</b></p>
+    <div class="card fade d3" id="capCard">
+      <div class="zonebar"><span class="nm">Indore Road</span><div class="track"><div class="fill" data-pc="92"></div></div><span class="pc">92%</span></div>
+      <div class="zonebar"><span class="nm">Dewas Road</span><div class="track"><div class="fill" data-pc="78"></div></div><span class="pc">78%</span></div>
+      <div class="zonebar"><span class="nm">Ramghat Approach</span><div class="track"><div class="fill" data-pc="99"></div></div><span class="pc">99%</span></div>
+      <div class="zonebar"><span class="nm">Unhel Road</span><div class="track"><div class="fill" data-pc="54"></div></div><span class="pc">54%</span></div>
+      <div class="zonebar"><span class="nm">Badnagar Road</span><div class="track"><div class="fill" data-pc="41"></div></div><span class="pc">41%</span></div>
+      <div class="zonebar"><span class="nm">Agar Road</span><div class="track"><div class="fill" data-pc="33"></div></div><span class="pc">33%</span></div>
+      <div style="display:flex;justify-content:space-between;margin-top:14px;font-size:13px;opacity:.7;font-weight:600">
+        <span>🟧 booked&nbsp;&nbsp;🟩 arrived &amp; verified&nbsp;&nbsp;⬜ available</span>
+        <span>🛰️ Indore last synced 3 min ago</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 9. BUSINESS MODEL & REVENUE (highlight) -->
+<section class="slide dark" data-name="Business & Revenue">
+  <span class="mandala m1"></span><span class="mandala m2"></span>
+  <div class="wrap">
+    <span class="kicker fade"><span class="dot"></span> The Business Model</span>
+    <h2 class="fade d1" style="font-size:clamp(24px,3.6vw,44px);margin:10px 0 6px">Self-funding public infrastructure.</h2>
+    <p class="fade d2" style="opacity:.82;margin-bottom:18px;max-width:70ch">UPI's near-zero cost makes a tiny per-booking convenience fee almost pure margin — the platform pays for itself <b>without burdening the devotee or the exchequer.</b> Drag the sliders.</p>
+    <div class="calc fade d3">
+      <div>
+        <div class="slider-row">
+          <label>Vehicle bookings on a peak day <b id="vOut">40,00,000</b></label>
+          <input type="range" id="sVol" min="500000" max="8000000" step="100000" value="4000000">
+        </div>
+        <div class="slider-row">
+          <label>Convenience fee / booking <b id="fOut">₹8</b></label>
+          <input type="range" id="sFee" min="2" max="25" step="1" value="8">
+        </div>
+        <div class="slider-row">
+          <label>Peak-load days in the event <b id="dOut">15</b></label>
+          <input type="range" id="sDays" min="1" max="45" step="1" value="15">
+        </div>
+        <div class="impact-live" id="impactLive">…</div>
+      </div>
+      <div class="gamebox">
+        <div class="odometer" id="revOut">₹48 Cr</div>
+        <div class="odo-cap">gross convenience-fee revenue / event window</div>
+        <div class="kalash" id="kalash">
+          <div class="kalash-glow"></div>
+          <svg class="kalash-svg" viewBox="0 0 160 206" aria-hidden="true">
+            <defs>
+              <linearGradient id="kBody" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="#5c2c06"/><stop offset=".15" stop-color="#a8500c"/>
+                <stop offset=".4" stop-color="#fcd34d"/><stop offset=".54" stop-color="#fef3c7"/>
+                <stop offset=".7" stop-color="#e08907"/><stop offset="1" stop-color="#5c2c06"/>
+              </linearGradient>
+              <linearGradient id="kRim" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="#8a4209"/><stop offset=".5" stop-color="#fef3c7"/><stop offset="1" stop-color="#6e3406"/>
+              </linearGradient>
+              <linearGradient id="kLiq" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#fff7d6"/><stop offset=".2" stop-color="#fde047"/>
+                <stop offset=".55" stop-color="#f59e0b"/><stop offset="1" stop-color="#b45309"/>
+              </linearGradient>
+              <radialGradient id="kSheen" cx=".34" cy=".24" r=".8">
+                <stop offset="0" stop-color="#fff" stop-opacity=".5"/><stop offset=".55" stop-color="#fff" stop-opacity="0"/>
+              </radialGradient>
+              <linearGradient id="kInside" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#140c03"/><stop offset=".45" stop-color="#3c2811"/><stop offset="1" stop-color="#22150a"/>
+              </linearGradient>
+              <clipPath id="kClip"><path d="M62,50 C50,58 34,70 34,92 C34,120 42,162 58,182 C64,189 72,192 80,192 C88,192 96,189 102,182 C118,162 126,120 126,92 C126,70 110,58 98,50 Z"/></clipPath>
+            </defs>
+            <!-- empty interior (shadowed metal cavity) -->
+            <path d="M62,50 C50,58 34,70 34,92 C34,120 42,162 58,182 C64,189 72,192 80,192 C88,192 96,189 102,182 C118,162 126,120 126,92 C126,70 110,58 98,50 Z" fill="url(#kInside)"/>
+            <!-- molten gold + waves, clipped to the vessel interior -->
+            <g clip-path="url(#kClip)">
+              <g class="k-liquid" id="liquid" style="transform:translateY(196px)">
+                <g class="wl wl-back"><path d="M-60,0 Q-50,4 -40,0 T-20,0 T0,0 T20,0 T40,0 T60,0 T80,0 T100,0 T120,0 T140,0 T160,0 T180,0 T200,0 T220,0 L220,236 L-60,236 Z" fill="url(#kLiq)" opacity=".82"/></g>
+                <g class="wl wl-front"><path d="M-60,0 Q-50,-3 -40,0 T-20,0 T0,0 T20,0 T40,0 T60,0 T80,0 T100,0 T120,0 T140,0 T160,0 T180,0 T200,0 T220,0 L220,236 L-60,236 Z" fill="url(#kLiq)"/></g>
+              </g>
+              <path d="M62,50 C50,58 34,70 34,92 C34,120 42,162 58,182 C64,189 72,192 80,192 C88,192 96,189 102,182 C118,162 126,120 126,92 C126,70 110,58 98,50 Z" fill="url(#kSheen)"/>
+              <!-- soft inner shadow just under the rim -->
+              <path d="M44,55 Q80,71 116,55" fill="none" stroke="#000" stroke-opacity=".4" stroke-width="7"/>
+              <!-- specular gleam on the upper-left belly -->
+              <ellipse cx="55" cy="98" rx="8.5" ry="38" fill="#fff" opacity=".15" transform="rotate(-9 55 98)"/>
+            </g>
+            <!-- vessel wall -->
+            <path d="M62,50 C50,58 34,70 34,92 C34,120 42,162 58,182 C64,189 72,192 80,192 C88,192 96,189 102,182 C118,162 126,120 126,92 C126,70 110,58 98,50 Z" fill="none" stroke="url(#kBody)" stroke-width="4.5" stroke-linejoin="round"/>
+            <!-- shoulder + belly highlight rings -->
+            <path d="M41,86 Q80,78 119,86" fill="none" stroke="rgba(255,247,214,.3)" stroke-width="1.3"/>
+            <path d="M45,150 Q80,159 115,150" fill="none" stroke="rgba(120,53,15,.35)" stroke-width="1.4"/>
+            <!-- rim collar + mouth -->
+            <path d="M62,50 C58,46 53,42 51,38 L109,38 C107,42 102,46 98,50 Z" fill="url(#kRim)" stroke="#7c3a09" stroke-width=".5"/>
+            <ellipse cx="80" cy="37.5" rx="29" ry="6.4" fill="#241607"/>
+            <ellipse cx="80" cy="37.5" rx="29" ry="6.4" fill="none" stroke="url(#kRim)" stroke-width="3"/>
+            <!-- footed base -->
+            <ellipse cx="80" cy="194" rx="23" ry="5" fill="url(#kRim)"/>
+          </svg>
+          <div class="kalash-pct" id="kalashPct">19%</div>
+        </div>
+        <div class="miles" id="miles">
+          <div class="mile" data-at="100000000"><span class="lamp">🪔</span><span class="ml">₹10 Cr</span><span class="mc">Pilot funded</span></div>
+          <div class="mile" data-at="500000000"><span class="lamp">🪔</span><span class="ml">₹50 Cr</span><span class="mc">Self-sustaining</span></div>
+          <div class="mile" data-at="1000000000"><span class="lamp">🪔</span><span class="ml">₹100 Cr</span><span class="mc">City surplus</span></div>
+          <div class="mile" data-at="2500000000"><span class="lamp">🪔</span><span class="ml">₹250 Cr</span><span class="mc">Kumbh circuit</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="streams fade d4" style="margin-top:22px">
+      <div class="stream"><b>① Convenience fee</b><span>₹5–15 per booking, BookMyShow-style. The volume engine at Simhastha scale.</span></div>
+      <div class="stream"><b>② Govt SaaS licence</b><span>Annual platform licence + per-checkpoint-node subscription (managed software, OPEX not CAPEX).</span></div>
+      <div class="stream"><b>③ Premium &amp; VIP slots</b><span>Reserved-capacity and priority-window pricing — same booking primitive, higher tier.</span></div>
+      <div class="stream"><b>④ Mobility analytics</b><span>Anonymised flow data licensed to Smart-City / urban-planning depts — a second product from the same pipe.</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- 10. SCALE / TAM -->
+<section class="slide" data-name="The Bigger Market">
+  <span class="mandala m2"></span>
+  <div class="wrap center" style="display:flex;flex-direction:column;align-items:center;gap:18px">
+    <span class="kicker fade">Build once, deploy everywhere</span>
+    <h2 class="fade d1" style="font-size:clamp(24px,3.8vw,44px);max-width:22ch;margin-bottom:2px">One platform. Every crowd-load event in India.</h2>
+    <p class="fade d2" style="opacity:.82;max-width:72ch">Simhastha is the proving ground — and the smallest bar. The same offline-first engine drops into any high-footfall, low-connectivity entry problem.</p>
+    <div class="tam fade d3" id="tamChart">
+      <div class="tam-row proof"><span class="tam-lbl">Simhastha 2028 <small>· one event</small></span><div class="tam-track"><div class="tam-bar proof" data-w="20"></div></div><span class="tam-val">~4 Cr</span></div>
+      <div class="tam-row"><span class="tam-lbl">Mahakal darshan <small>· year-round</small></span><div class="tam-track"><div class="tam-bar" data-w="30"></div></div><span class="tam-val">~6 Cr</span></div>
+      <div class="tam-row"><span class="tam-lbl">Kumbh circuit <small>· Prayagraj·Nashik·Haridwar</small></span><div class="tam-track"><div class="tam-bar" data-w="46"></div></div><span class="tam-val">~9 Cr</span></div>
+      <div class="tam-row"><span class="tam-lbl">Temple towns <small>· Tirupati·Vaishno Devi</small></span><div class="tam-track"><div class="tam-bar" data-w="62"></div></div><span class="tam-val">~12 Cr</span></div>
+      <div class="tam-row"><span class="tam-lbl">Civic &amp; event parking <small>· stadiums·fairs</small></span><div class="tam-track"><div class="tam-bar" data-w="100"></div></div><span class="tam-val">~20 Cr</span></div>
+    </div>
+    <div class="tam-total fade d4">Total addressable: <b>50 Cr+ vehicle bookings / year</b> across India</div>
+    <div class="tam-cap fade d4">Illustrative annual addressable booking volume per segment · same codebase, same hardware floor.</div>
+  </div>
+</section>
+
+<!-- 11. IMPACT -->
+<section class="slide dark" data-name="Impact">
+  <span class="mandala m1"></span>
+  <div class="wrap">
+    <span class="kicker fade">Why It Matters</span>
+    <h2 class="fade d1" style="font-size:clamp(24px,3.6vw,44px);margin:12px 0 28px">Safety, order, and dignity at scale.</h2>
+    <div class="grid g4">
+      <div class="stat fade d2"><div class="num" data-to="2.5" data-suffix=" Cr">0</div><div class="lbl">devotees handled on a planned peak day</div></div>
+      <div class="stat fade d3"><div class="num" data-to="5" data-suffix=" s">0</div><div class="lbl">to admit/deny — online or offline</div></div>
+      <div class="stat fade d4"><div class="num" data-to="0" data-suffix="₹">0</div><div class="lbl">new citizen hardware — phone + SMS</div></div>
+      <div class="stat fade d5"><div class="num" data-to="100" data-suffix="%">0</div><div class="lbl">decisions logged, even in a blackout</div></div>
+    </div>
+    <div class="grid g3 fade d5" style="margin-top:30px">
+      <div class="card"><h3>🛟 Prevents the chokepoint</h3><p>Metered arrival windows turn a stampede risk into a managed queue — the core Kumbh-safety lesson.</p></div>
+      <div class="card"><h3>🏛️ Accountable</h3><p>Two-person lockdown, cause-tagged revocations, and a full audit log of who did what, when.</p></div>
+      <div class="card"><h3>♻️ No tender lock-in</h3><p>Commodity hardware with a local MP supply chain — no exclusive vendor, no bespoke board.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 12. ROADMAP -->
+<section class="slide" data-name="Roadmap">
+  <span class="mandala m2"></span>
+  <div class="wrap">
+    <span class="kicker fade">Phased Rollout</span>
+    <h2 class="fade d1" style="font-size:clamp(26px,4vw,46px);margin:14px 0 26px">Prove it for free, then scale.</h2>
+    <div class="grid g3">
+      <div class="card fade d2"><span class="pill">▶ You are here</span><h3 style="margin-top:12px">Phase 0 — Prototype</h3><p>Software-only simulation running on a laptop: booking, one checkpoint, sync &amp; lockdown logic. Proves the concept <b>without asking for a single rupee of hardware.</b></p></div>
+      <div class="card fade d3"><span class="pill gold">Pilot</span><h3 style="margin-top:12px">Phase 1 — 1–2 gates</h3><p>Real Raspberry-Pi nodes on a normal high-footfall Mahakal day. Real QR scanning, real UPI, real offline behaviour.</p></div>
+      <div class="card fade d4"><span class="pill rose">Event scale</span><h3 style="margin-top:12px">Phase 2 — All approaches</h3><p>Every approach-road checkpoint ahead of Simhastha 2028, integrated with the state command centre &amp; Sahayak as a data source/sink.</p></div>
+    </div>
+    <p class="fade d5 center" style="margin-top:24px;opacity:.7;font-size:14px;max-width:70ch;margin-left:auto;margin-right:auto"><b>Honest open questions we bring to the table:</b> legal authority for lockdown · source-of-truth reconciliation with Sahayak · the real connectivity SLA · refund policy for dynamic closures.</p>
+  </div>
+</section>
+
+<!-- 13. CLOSE -->
+<section class="slide dark center" data-name="The Ask">
+  <span class="mandala m1"></span><span class="mandala m2"></span>
+  <div class="wrap center" style="display:flex;flex-direction:column;align-items:center;gap:22px">
+    <span class="kicker fade"><span class="dot"></span> The Demo, in one line</span>
+    <h2 class="fade d1" style="font-size:clamp(28px,4.6vw,58px);max-width:22ch">Book → go offline → verify → lockdown still works → reconnect &amp; sync.</h2>
+    <p class="lead fade d2" style="max-width:60ch">That single flow — demonstrated end-to-end in under five minutes — <b>is the entire pitch.</b> A connectivity-independent vehicle-entry layer for the world's largest gathering, built on hardware MP already owns.</p>
+    <div class="badge-row fade d3" style="margin-top:6px">
+      <span class="tag">📴 Offline-first</span><span class="tag">🔐 Tamper-evident</span><span class="tag">💰 Self-funding</span><span class="tag">♻️ Procurement-easy</span><span class="tag">📈 Replicable</span>
+    </div>
+    <p class="fade d4 serif" style="font-size:clamp(20px,3vw,30px);color:var(--gold);margin-top:10px">॥ Connectivity is an optimization, not a dependency ॥</p>
+  </div>
+</section>
+
+</script>
+
+<script>
+/* ============================================================
+   Deck engine
+   ============================================================ */
+(function(){
+  const deck = document.getElementById('deck');
+  const tpl  = document.getElementById('slides').innerHTML;
+  deck.innerHTML = tpl;
+  const slides = Array.from(deck.querySelectorAll('.slide'));
+  const dotsWrap = document.getElementById('dots');
+  const counter = document.getElementById('counter');
+  const prog = document.getElementById('progress');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+  let cur = 0;
+
+  // Build one crisp yantra SVG, drop it into every .mandala. Rasterised once by the
+  // browser, then only the layer's transform is animated → GPU-composited, no repaint.
+  function yantra(){
+    const p=[];
+    p.push('<circle cx=100 cy=100 r=97/>','<circle cx=100 cy=100 r=82/>','<circle cx=100 cy=100 r=46/>');
+    p.push('<circle cx=100 cy=100 r=3.5 fill=currentColor stroke=none/>');
+    for(let i=0;i<24;i++){const a=i*Math.PI/12;
+      p.push('<line x1='+(100+46*Math.cos(a)).toFixed(1)+' y1='+(100+46*Math.sin(a)).toFixed(1)+' x2='+(100+82*Math.cos(a)).toFixed(1)+' y2='+(100+82*Math.sin(a)).toFixed(1)+'/>');}
+    for(let i=0;i<12;i++){const a=i*Math.PI/6;
+      p.push('<circle cx='+(100+70*Math.cos(a)).toFixed(1)+' cy='+(100+70*Math.sin(a)).toFixed(1)+' r=2.6/>');}
+    for(let i=0;i<8;i++){const a=i*Math.PI/4;
+      const x1=(100+12*Math.cos(a)).toFixed(1),y1=(100+12*Math.sin(a)).toFixed(1);
+      const x2=(100+40*Math.cos(a)).toFixed(1),y2=(100+40*Math.sin(a)).toFixed(1);
+      const c1x=(100+27*Math.cos(a+.34)).toFixed(1),c1y=(100+27*Math.sin(a+.34)).toFixed(1);
+      const c2x=(100+27*Math.cos(a-.34)).toFixed(1),c2y=(100+27*Math.sin(a-.34)).toFixed(1);
+      p.push('<path d="M'+x1+' '+y1+' Q'+c1x+' '+c1y+' '+x2+' '+y2+' Q'+c2x+' '+c2y+' '+x1+' '+y1+' Z"/>');}
+    return '<svg viewBox="0 0 200 200" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round">'+p.join('')+'</svg>';
+  }
+  const YANTRA=yantra();
+  document.querySelectorAll('.mandala').forEach(m=>m.innerHTML=YANTRA);
+
+  // sprinkle diya embers on dark slides (transform-only animation)
+  slides.forEach(s=>{
+    if(s.classList.contains('dark')){
+      for(let i=0;i<5;i++){
+        const d=document.createElement('span');
+        d.className='diya';
+        d.style.left=(8+Math.random()*84)+'%';
+        d.style.top=(12+Math.random()*76)+'%';
+        d.style.animationDelay=(Math.random()*6)+'s';
+        d.style.animationDuration=(6+Math.random()*4)+'s';
+        s.appendChild(d);
+      }
+    }
+  });
+
+  // dots
+  slides.forEach((s,i)=>{
+    const b=document.createElement('button');
+    b.title=s.dataset.name||('Slide '+(i+1));
+    b.addEventListener('click',()=>go(i));
+    dotsWrap.appendChild(b);
+  });
+  const dots = Array.from(dotsWrap.children);
+
+  function go(i){
+    i=Math.max(0,Math.min(slides.length-1,i));
+    slides.forEach((s,k)=>{
+      s.classList.toggle('active',k===i);
+      s.classList.toggle('prev',k<i);
+    });
+    dots.forEach((d,k)=>d.classList.toggle('on',k===i));
+    counter.textContent=String(i+1).padStart(2,'0')+' / '+String(slides.length).padStart(2,'0');
+    prog.style.width=((i)/(slides.length-1)*100)+'%';
+    prevBtn.disabled=i===0; nextBtn.disabled=i===slides.length-1;
+    cur=i;
+    if(('#'+(i+1))!==location.hash){ history.replaceState(null,'','#'+(i+1)); }
+    onEnter(slides[i]);
+  }
+  const next=()=>go(cur+1), prev=()=>go(cur-1);
+  nextBtn.onclick=next; prevBtn.onclick=prev;
+
+  document.addEventListener('keydown',e=>{
+    if(['ArrowRight','ArrowDown','PageDown',' '].includes(e.key)){e.preventDefault();next();}
+    else if(['ArrowLeft','ArrowUp','PageUp'].includes(e.key)){e.preventDefault();prev();}
+    else if(e.key==='Home')go(0);
+    else if(e.key==='End')go(slides.length-1);
+  });
+  // swipe
+  let tx=0;
+  deck.addEventListener('touchstart',e=>tx=e.touches[0].clientX,{passive:true});
+  deck.addEventListener('touchend',e=>{const dx=e.changedTouches[0].clientX-tx;if(Math.abs(dx)>50){dx<0?next():prev();}});
+
+  /* ---- per-slide enter animations ---- */
+  function onEnter(s){
+    const name=s.dataset.name;
+    if(name==='Live Capacity'){
+      s.querySelectorAll('.fill').forEach(f=>{
+        const pc=+f.dataset.pc; f.style.width='0';
+        requestAnimationFrame(()=>{ setTimeout(()=>{ f.style.width=pc+'%'; f.classList.toggle('hot',pc>=90); },120); });
+      });
+    }
+    if(name==='Impact'){
+      s.querySelectorAll('.num').forEach(n=>countUp(n));
+    }
+    if(name==='The Problem'){ const c=document.getElementById('demandChart'); if(c){c.classList.remove('draw');void c.offsetWidth;c.classList.add('draw');} }
+    if(name==='The Bigger Market'){ const t=document.getElementById('tamChart'); if(t){ t.querySelectorAll('.tam-bar').forEach(b=>{b.style.width='0';}); requestAnimationFrame(()=>setTimeout(()=>{ t.querySelectorAll('.tam-bar').forEach((b,i)=>{ setTimeout(()=>{b.style.width=b.dataset.w+'%';}, i*110); }); },80)); } }
+    if(name==='Business & Revenue'){ resetGame(); calc(true); }
+    if(name==='Where We Fit'){ const f=document.getElementById('zrFill'); if(f){f.style.width='0';} requestAnimationFrame(()=>selectZone(zrSel)); }
+    if(name==='Architecture'){ resetArch(); }
+    if(name==='Booking Flow'){ stopBkPlay(); if(window._bkSetStep)_bkSetStep(0); }
+  }
+  function countUp(el){
+    const to=parseFloat(el.dataset.to), suf=el.dataset.suffix||'';
+    const dec=(to%1!==0)?1:0; const dur=1100; const t0=performance.now();
+    function tick(t){
+      const p=Math.min(1,(t-t0)/dur); const e=1-Math.pow(1-p,3);
+      el.textContent=(to*e).toFixed(dec)+suf;
+      if(p<1)requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  }
+
+  /* ---- Live offline checkpoint demo ---- */
+  let online=true, locked=false;
+  const scr=()=>document.getElementById('demoScreen');
+  const netBadge=()=>document.getElementById('netBadge');
+  function setScreen(state,big,small){
+    const el=scr(); if(!el)return;
+    el.className='demo-screen '+state;
+    el.innerHTML=big+'<small>'+small+'</small>';
+  }
+  function bind(){
+    const bScan=document.getElementById('bScan');
+    const bNet=document.getElementById('bNet');
+    const bLock=document.getElementById('bLock');
+    const bReset=document.getElementById('bReset');
+    if(!bScan||bScan._bound)return; bScan._bound=true;
+
+    bScan.onclick=()=>{
+      if(locked){ setScreen('scr-deny','⛔ DENIED','LOCKDOWN active · all passes revoked'+(online?'':' · verified OFFLINE')); return; }
+      setScreen('scr-idle','⏳ VERIFYING','checking Ed25519 signature on-device…');
+      setTimeout(()=>{
+        setScreen('scr-admit','✅ ADMIT', (online?'signature valid · MP09-CX-4412':'signature valid · verified with NO network ('+'soft-green)') );
+      },520);
+    };
+    bNet.onclick=()=>{
+      online=!online;
+      bNet.classList.toggle('off',!online);
+      bNet.textContent=online?'📴 Cut network':'🌐 Restore network';
+      const nb=netBadge();
+      nb.className='netbadge '+(online?'net-on':'net-off');
+      nb.textContent=online?'🟢 NETWORK: ONLINE':'🔴 NETWORK: OFFLINE';
+      if(online && document.querySelector('.scr-deny') && !locked){}
+    };
+    bLock.onclick=()=>{
+      locked=!locked;
+      bLock.textContent=locked?'🔓 Lift lockdown':'🛑 Lockdown';
+      if(locked) setScreen('scr-deny','🛑 LOCKDOWN','all bookings revoked'+(online?'':' · propagated even OFFLINE'));
+      else setScreen('scr-idle','READY','Indore Rd · Gate 1 · awaiting scan');
+    };
+    bReset.onclick=()=>{
+      locked=false; online=true;
+      bLock.textContent='🛑 Lockdown';
+      bNet.textContent='📴 Cut network'; bNet.classList.remove('off');
+      const nb=netBadge(); nb.className='netbadge net-on'; nb.textContent='🟢 NETWORK: ONLINE';
+      setScreen('scr-idle','READY','Indore Rd · Gate 1 · awaiting scan');
+    };
+  }
+
+  /* ---- Gamified revenue calculator (the kalash that fills with gold) ---- */
+  const KALASH_FULL = 2.5e9;            // ₹250 Cr fills the pot to the brim
+  // surface position in SVG user units: empty (pct 0) sits at the base, full at the rim
+  function liquidY(pct){ return 46 + (1 - Math.max(0,Math.min(100,pct))/100) * 150; }
+  function fmtCr(rupees){
+    if(rupees>=1e7){ const cr=rupees/1e7; return '₹'+(cr>=100?Math.round(cr):cr.toFixed(cr>=10?0:1))+' Cr'; }
+    if(rupees>=1e5) return '₹'+(rupees/1e5).toFixed(1)+' L';
+    return '₹'+Math.round(rupees).toLocaleString('en-IN');
+  }
+  function fmtIN(n){return n.toLocaleString('en-IN');}
+
+  // odometer that eases toward its target so dragging feels like rolling cash
+  let odoCur=0, odoTarget=0, odoRAF=null;
+  function rollTo(val){
+    odoTarget=val;
+    if(odoRAF)return;
+    const el=document.getElementById('revOut');
+    const tick=()=>{
+      const diff=odoTarget-odoCur;
+      if(Math.abs(diff)<odoTarget*0.004+1){ odoCur=odoTarget; el.textContent=fmtCr(odoCur); odoRAF=null; return; }
+      odoCur+=diff*0.18;
+      el.textContent=fmtCr(odoCur);
+      odoRAF=requestAnimationFrame(tick);
+    };
+    odoRAF=requestAnimationFrame(tick);
+  }
+
+  let litSet=new Set();
+  function resetGame(){
+    litSet=new Set();
+    odoCur=0; if(odoRAF){cancelAnimationFrame(odoRAF);odoRAF=null;}
+    const liq=document.getElementById('liquid'); if(liq)liq.style.transform='translateY('+liquidY(0)+'px)';
+    document.querySelectorAll('.mile').forEach(m=>m.classList.remove('lit'));
+    const k=document.getElementById('kalash'); if(k)k.classList.remove('full');
+  }
+  function burstCoins(n){
+    const k=document.getElementById('kalash'); if(!k)return;
+    for(let i=0;i<n;i++){
+      const c=document.createElement('span');
+      c.className='coin';
+      const sz=(13+Math.random()*6).toFixed(1);
+      c.style.width=c.style.height=sz+'px';
+      // fountain up out of the vessel mouth (kalash 160px wide, mouth at top-centre)
+      c.style.left=(80 + (i-(n-1)/2)*11 + (Math.random()*6-3) - 7)+'px';
+      c.style.bottom=(150+Math.random()*16)+'px';
+      c.style.animationDelay=(i*0.05+Math.random()*0.05).toFixed(3)+'s';
+      k.appendChild(c);
+      setTimeout(()=>c.remove(),1250);
+    }
+  }
+  function calc(replay){
+    const v=document.getElementById('sVol'), f=document.getElementById('sFee'), d=document.getElementById('sDays');
+    if(!v)return;
+    const vol=+v.value, fee=+f.value, days=+d.value;
+    const rev=vol*fee*days;
+    document.getElementById('vOut').textContent=fmtIN(vol);
+    document.getElementById('fOut').textContent='₹'+fee;
+    document.getElementById('dOut').textContent=days;
+
+    // odometer
+    if(replay){ odoCur=0; rollTo(rev); } else rollTo(rev);
+    const odo=document.getElementById('revOut');
+    odo.classList.add('bump'); setTimeout(()=>odo.classList.remove('bump'),150);
+
+    // kalash fill
+    const pct=Math.min(100, rev/KALASH_FULL*100);
+    const liq=document.getElementById('liquid');
+    if(replay){ liq.style.transform='translateY('+liquidY(0)+'px)'; requestAnimationFrame(()=>setTimeout(()=>liq.style.transform='translateY('+liquidY(pct)+'px)',140)); }
+    else liq.style.transform='translateY('+liquidY(pct)+'px)';
+    document.getElementById('kalashPct').textContent=Math.round(pct)+'%';
+    document.getElementById('kalash').classList.toggle('full', pct>=100);
+
+    // milestone diyas — ignite newly-crossed ones with a coin burst
+    document.querySelectorAll('.mile').forEach(m=>{
+      const at=+m.dataset.at, on=rev>=at;
+      m.classList.toggle('lit',on);
+      if(on && !litSet.has(at) && !replay){ litSet.add(at); burstCoins(7); }
+      else if(on){ litSet.add(at); }
+      else litSet.delete(at);
+    });
+
+    // live "what this funds" readout (₹1 Cr ≈ one full 7-zone, multi-gate deployment cycle)
+    const deployments=Math.max(0,Math.floor(rev/1e7));
+    const pilots=(rev/2e7); // Phase-1 pilot ≈ ₹2 Cr
+    document.getElementById('impactLive').innerHTML=
+      '🪔 Self-funds <b>'+deployments.toLocaleString('en-IN')+'</b> complete 7-zone checkpoint deployments — '+
+      'roughly <b>'+(pilots>=10?Math.round(pilots):pilots.toFixed(1))+'×</b> the entire Phase-1 pilot, at <b>zero</b> cost to the devotee.';
+  }
+  function bindCalc(){
+    ['sVol','sFee','sDays'].forEach(id=>{
+      const el=document.getElementById(id);
+      if(el && !el._b){el._b=true; el.addEventListener('input',()=>calc(false));}
+    });
+    calc(false);
+  }
+
+  /* ---- Interactive: 7-zone yantra ring (Where We Fit) ---- */
+  let zrSel=0;
+  function initZoneRing(){
+    const ring=document.getElementById('zrRing'); if(!ring||ring._init)return; ring._init=true;
+    const nodes=Array.from(ring.querySelectorAll('.zr-node'));
+    const spokes=document.getElementById('zrSpokes');
+    const N=nodes.length, R=42; let lines='';
+    nodes.forEach((n,i)=>{
+      const a=(-90+i*360/N)*Math.PI/180;
+      const x=50+R*Math.cos(a), y=50+R*Math.sin(a);
+      n.style.left=x+'%'; n.style.top=y+'%';
+      lines+='<line x1="50" y1="50" x2="'+x.toFixed(2)+'" y2="'+y.toFixed(2)+'" data-i="'+i+'"/>';
+      n.addEventListener('click',()=>selectZone(i));
+      n.addEventListener('mouseenter',()=>selectZone(i));
+    });
+    spokes.innerHTML=lines;
+    selectZone(0);
+  }
+  function selectZone(i){
+    const ring=document.getElementById('zrRing'); if(!ring)return;
+    const nodes=ring.querySelectorAll('.zr-node'); const node=nodes[i]; if(!node)return;
+    zrSel=i;
+    nodes.forEach(n=>n.classList.remove('sel')); node.classList.add('sel');
+    ring.querySelectorAll('#zrSpokes line').forEach(l=>l.classList.toggle('on',+l.dataset.i===i));
+    const pc=+node.dataset.pc;
+    document.getElementById('zrName').textContent=node.dataset.road;
+    document.getElementById('zrRoadLbl').textContent='Zone '+(i+1)+' · approach checkpoint';
+    const f=document.getElementById('zrFill'); f.style.width=pc+'%'; f.classList.toggle('hot',pc>=90);
+    document.getElementById('zrPcLbl').textContent=pc+'% booked';
+    document.getElementById('zrStatus').textContent=pc>=90?'⚠ near capacity → overflow armed':pc>=70?'filling steadily':'plenty of room';
+    document.getElementById('zrMix').textContent=node.dataset.mix;
+  }
+
+  /* ---- Interactive: architecture network toggle ---- */
+  function initArch(){
+    const btn=document.getElementById('arToggle'); if(!btn||btn._init)return; btn._init=true;
+    btn.addEventListener('click',()=>{
+      const diag=document.getElementById('archDiag');
+      const sev=diag.classList.toggle('severed');
+      btn.classList.toggle('up',sev);
+      btn.textContent=sev?'🔗 Restore the network':'✂ Cut the network';
+      document.getElementById('arSyncLbl').textContent=sev?'no uplink — every gate runs on its own SQLite + public key':'syncs opportunistically — batched, not real-time';
+      document.getElementById('arCaption').innerHTML=sev
+        ?'The cloud is unreachable — yet every gate keeps admitting, denying and logging from its <b>local cache and on-device signature check</b>. Connectivity was only ever an optimisation.'
+        :'Same trust model as a FASTag toll plaza or an airline boarding pass: transactions batch up and sync when a link appears. Nothing riskier than what NHAI already runs nationally.';
+    });
+  }
+  function resetArch(){
+    const diag=document.getElementById('archDiag'); const btn=document.getElementById('arToggle');
+    if(!diag||!btn)return;
+    diag.classList.remove('severed'); btn.classList.remove('up'); btn.textContent='✂ Cut the network';
+    const l=document.getElementById('arSyncLbl'); if(l)l.textContent='syncs opportunistically — batched, not real-time';
+    const cap=document.getElementById('arCaption'); if(cap)cap.innerHTML='Same trust model as a FASTag toll plaza or an airline boarding pass: transactions batch up and sync when a link appears. Nothing riskier than what NHAI already runs nationally.';
+  }
+
+  /* ---- Interactive: booking phone stepper ---- */
+  function bkScreenHTML(step){
+    const top=(app,h)=>'<div class="bk-top"><div class="bk-app">'+app+'</div><div class="bk-h">'+h+'</div></div>';
+    const zrow=(name,pc,sel,hot)=>'<div class="row '+(sel?'pick':'')+'" style="flex-direction:column;align-items:stretch;gap:6px">'+
+      '<div style="display:flex"><span>'+name+'</span><span style="margin-left:auto;font-weight:800;color:'+(hot?'#e11d48':sel?'#ea580c':'#64748b')+'">'+pc+'%'+(sel?' ✓':'')+'</span></div>'+
+      '<div class="bk-mini"><i style="width:'+pc+'%'+(hot?';background:linear-gradient(90deg,#e11d48,#f97316)':'')+'"></i></div></div>';
+    if(step===0) return top('Ujjain VMS · Book','Choose your event')+
+      '<div class="bk-body bk-fade"><div class="row pick">🛕 Shahi Snan — 14 Jan 2028<span class="tick">✓</span></div>'+
+      '<div class="row">🪔 Regular darshan — any day</div><div class="row">🚓 VIP movement window</div></div>';
+    if(step===1) return top('Step 2 of 6','Pick your entry zone')+
+      '<div class="bk-body bk-fade">'+zrow('Indore Road',92,false,true)+zrow('Dewas Road',78,false,false)+zrow('Unhel Road',54,true,false)+'</div>';
+    if(step===2) return top('Step 3 of 6','Pick a time slot')+
+      '<div class="bk-body bk-fade"><div class="bk-grid">'+
+      '<div class="bk-slot full">06:00</div><div class="bk-slot">06:30</div><div class="bk-slot pick">07:00</div>'+
+      '<div class="bk-slot">07:30</div><div class="bk-slot">08:00</div><div class="bk-slot">08:30</div></div>'+
+      '<p style="font-size:12px;opacity:.7;margin-top:14px;text-align:center">30-minute arrival window · 07:00–07:30</p></div>';
+    if(step===3) return top('Step 4 of 6','Vehicle &amp; number plate')+
+      '<div class="bk-body bk-fade"><div class="bk-veh">'+
+      '<div><span class="em">🏍️</span>2-Wheeler</div><div class="pick"><span class="em">🚗</span>Car</div><div><span class="em">🚌</span>Bus</div></div>'+
+      '<div class="bk-plate">MP 09 CX 4412</div>'+
+      '<p style="font-size:11.5px;opacity:.72;margin-top:11px;text-align:center;line-height:1.45">🔐 This plate is <b>signed into your QR</b> — a copied pass won\'t work on another vehicle.</p></div>';
+    if(step===4) return top('Step 5 of 6','Pay via UPI')+
+      '<div class="bk-body bk-fade" style="display:flex;flex-direction:column;justify-content:center">'+
+      '<div class="bk-pay"><div style="font-size:12px;opacity:.7;font-weight:700">Amount payable</div><div class="amt">₹120</div>'+
+      '<div style="font-size:12px;opacity:.7;margin-top:4px">Car · Unhel Road · 07:00 slot</div></div>'+
+      '<button class="bk-paybtn" id="bkPay">Pay ₹120 via UPI</button></div>';
+    return top('Your pass · ready','Show this at the gate')+
+      '<div class="bk-body bk-fade" style="text-align:center">'+
+      '<div style="font-size:12px;font-weight:800;color:#059669;margin-bottom:8px">✓ PAID · pass issued</div>'+
+      '<div class="bk-qr" id="bkQr"></div>'+
+      '<div class="bk-code">SMS fallback code<br><b>7K2 9QX</b></div></div>';
+  }
+  function fillQr(){
+    const el=document.getElementById('bkQr'); if(!el)return;
+    el.style.gridTemplateColumns='repeat(11,1fr)'; el.style.gridTemplateRows='repeat(11,1fr)';
+    const n=11; const eye=(r,c)=>{
+      const blocks=[[0,0],[0,n-3],[n-3,0]];
+      for(const b of blocks){ if(r>=b[0]&&r<b[0]+3&&c>=b[1]&&c<b[1]+3){ return !((r-b[0])===1&&(c-b[1])===1);} }
+      return null;
+    };
+    let h='',idx=0;
+    for(let r=0;r<n;r++)for(let c=0;c<n;c++){
+      const e=eye(r,c); const on=(e!==null)?e:((((r+1)*(c+3)*7919)%5)<2);
+      h+='<i class="'+(on?'':'off')+'" style="animation-delay:'+(idx*4)+'ms"></i>'; idx++;
+    }
+    el.innerHTML=h;
+  }
+  let bkTimer=null;
+  function stopBkPlay(){ if(bkTimer){clearTimeout(bkTimer);bkTimer=null;} const p=document.getElementById('bkPlay'); if(p)p.textContent='▶ Play the booking'; }
+  function initBooking(){
+    const wrap=document.getElementById('bkSteps'); if(!wrap||wrap._init)return; wrap._init=true;
+    const btns=Array.from(wrap.querySelectorAll('.bk-step'));
+    function setStep(s){
+      btns.forEach((b,i)=>{b.classList.toggle('on',i===s);b.classList.toggle('done',i<s);});
+      const scr=document.getElementById('bkScreen');
+      scr.innerHTML='<div class="bk-notch"></div>'+bkScreenHTML(s);
+      if(s===4){ const pb=document.getElementById('bkPay'); if(pb)pb.onclick=()=>{ pb.textContent='Paid ✓'; pb.classList.add('bk-payok'); setTimeout(()=>setStep(5),650); }; }
+      if(s===5){ fillQr(); }
+    }
+    btns.forEach((b,i)=>b.addEventListener('click',()=>{stopBkPlay();setStep(i);}));
+    document.getElementById('bkPlay').onclick=()=>{
+      stopBkPlay(); const p=document.getElementById('bkPlay'); p.textContent='● Playing…';
+      setStep(0); let s=0;
+      function adv(){ s++; setStep(s); if(s<5){ bkTimer=setTimeout(adv, s===4?1500:1250); } else stopBkPlay(); }
+      bkTimer=setTimeout(adv,1100);
+    };
+    document.getElementById('bkReset').onclick=()=>{ stopBkPlay(); setStep(0); };
+    window._bkSetStep=setStep;
+    setStep(0);
+  }
+
+  // rebind interactive widgets whenever they exist (they're in the DOM from start)
+  bind(); bindCalc(); initZoneRing(); initArch(); initBooking();
+
+  window.addEventListener('hashchange',()=>{ const n=parseInt(location.hash.slice(1),10); if(n>=1&&n<=slides.length)go(n-1); });
+  const start=parseInt(location.hash.slice(1),10);
+  go(start>=1&&start<=slides.length?start-1:0);
+})();
+</script>
+</body>
+</html>
