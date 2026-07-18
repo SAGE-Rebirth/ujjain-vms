@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from shared import auth, tickets  # noqa: E402
 
 import db  # noqa: E402
+import mongo_sync  # noqa: E402  (cloud mirror — inert unless MONGO_URI is set)
 
 STAFF_ROLES = ("commander", "dispatcher", "operator")
 # Max active (booked/arrived) bookings per citizen phone per event date. The
@@ -195,6 +196,9 @@ def _startup() -> None:
     db.init_db()
     mode = f"LIVE (key {RAZORPAY_KEY_ID[:12]}…)" if RAZORPAY_LIVE else "MOCK (no keys — set RAZORPAY_KEY_ID/SECRET)"
     print(f"[payments] Razorpay mode: {mode}", file=sys.stderr)
+    # Start the opportunistic cloud mirror (SQLite stays source of truth; this
+    # pushes deltas to MongoDB when a link exists). No-op unless MONGO_URI is set.
+    mongo_sync.start()
 
 
 # --------------------------------------------------------------------------- #
@@ -1703,6 +1707,33 @@ def sync_logs(req: SyncLogsReq, node: dict = Depends(node_dep)):
     conn.commit()
     conn.close()
     return {"ingested": ingested, "assignments": assigned, "snapshot": snap}
+
+
+# --------------------------------------------------------------------------- #
+# Cloud mirror (MongoDB) — status + manual sync trigger for the demo.
+# The mirror also runs automatically on a background timer; these endpoints let
+# the command centre SEE it working and force a push during the pitch.
+# --------------------------------------------------------------------------- #
+@app.get("/api/admin/mongo/status")
+def mongo_status(principal: dict = Depends(staff_dep)):
+    """Is the cloud mirror on, reachable, and when did it last sync."""
+    return mongo_sync.status()
+
+
+@app.post("/api/admin/mongo/sync")
+def mongo_sync_now(commander: dict = Depends(commander_dep)):
+    """Force a batch push to MongoDB now (local SQLite → cloud). Best-effort:
+    returns per-collection counts, or an error blob if the cloud is unreachable —
+    the local system keeps working either way."""
+    if not mongo_sync.enabled():
+        raise HTTPException(400, "cloud mirror disabled — set MONGO_URI in .env")
+    result = mongo_sync.sync_once()
+    conn = db.connect()
+    audit(conn, commander["name"], "mongo.sync",
+          f"pushed={result.get('pushed', 0)} error={result.get('error')}")
+    conn.commit()
+    conn.close()
+    return result
 
 
 # --------------------------------------------------------------------------- #

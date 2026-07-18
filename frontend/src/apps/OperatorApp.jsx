@@ -5,6 +5,7 @@ import {
 } from '../api.js'
 import { Card, Badge, Button, Switch, Spinner, FillBar, staleness, vehicleIcon } from '../ui/components.jsx'
 import QrScanner from '../ui/QrScanner.jsx'
+import PlateScanner from '../ui/PlateScanner.jsx'
 
 export default function OperatorApp({ section }) {
   const [status, setStatus] = useState(null)
@@ -19,7 +20,11 @@ export default function OperatorApp({ section }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [base, setBase] = useState(getCheckpointBase())
-  const [scanning, setScanning] = useState(false)   // camera QR scanner on/off
+  // Camera source at the gate: 'anpr' auto-reads the number plate (primary),
+  // 'qr' scans the pass QR (fallback when a plate won't read), 'off' = manual only.
+  const [camMode, setCamMode] = useState(() => localStorage.getItem('cam_mode') || 'anpr')
+  const setCam = (m) => { localStorage.setItem('cam_mode', m); setCamMode(m) }
+  const [anprMsg, setAnprMsg] = useState('')        // ANPR fell back to QR — why
   // Gate mode: ENTRY admits & assigns a lot; EXIT releases the parked space.
   // Persisted so a node stays configured as an entry- or exit-lane between sessions.
   const [mode, setMode] = useState(() => localStorage.getItem('gate_mode') || 'entry')
@@ -75,15 +80,26 @@ export default function OperatorApp({ section }) {
   const verify = async (body) => {
     setErr(''); setResult(null); setBusy(true)
     try {
-      const r = await cpVerify({ ...body, observed_plate: observed || undefined })
+      // body wins over the state-defaulted observed_plate (so an ANPR/ exit call
+      // can override it explicitly).
+      const r = await cpVerify({ observed_plate: observed || undefined, ...body })
       setResult(r)
-      if (r.decision === 'admit') { setToken(''); setCode(''); setObserved('') }
+      // Plate read but no matching pass in the cache → auto-fall back to the QR
+      // scanner and tell the operator why. Manual entry stays available below.
+      if (r.plate_unmatched) {
+        setAnprMsg(`couldn't match plate ${r.observed_plate || ''} — scan the QR or type the code`)
+        setCam('qr')
+      }
+      if (r.decision === 'admit') { setToken(''); setCode(''); setObserved(''); setAnprMsg('') }
     } catch (e) { setErr(e.message) } finally { setBusy(false); refresh() }
   }
   // Camera decoded a QR → act on it immediately, no typing. In EXIT mode the same
   // scan releases the parked space instead of admitting.
   // Any observed plate already entered is included so binding is still checked.
   const onScan = (text) => { setToken(text); isExit ? doExit({ token: text }) : verify({ token: text }) }
+  // ANPR read a number plate → resolve the booking by plate offline and act.
+  // On no match the verify() handler flips the camera to QR automatically.
+  const onPlate = (plate) => { setObserved(plate); isExit ? doExit({ plate }) : verify({ plate }) }
   const guard = (fn) => async () => { if (!status) return; setErr(''); try { await fn(); refresh() } catch (e) { setErr(e.message) } }
   const doExit = async (body) => {
     setErr(''); setResult(null); setBusy(true)
@@ -91,8 +107,12 @@ export default function OperatorApp({ section }) {
       const r = await cpExit(body || (token ? { token } : { code }))
       setResult({ decision: 'exit', reason: `↩ exit registered — a space freed in ${r.freed_lot}`,
         booking_id: r.booking_id, freed_lot: r.freed_lot })
-      setToken(''); setCode(''); setObserved('')
-    } catch (e) { setErr(e.message) } finally { setBusy(false); refresh() }
+      setToken(''); setCode(''); setObserved(''); setAnprMsg('')
+    } catch (e) {
+      // ANPR exit couldn't find a parked match → fall back to QR, keep the error quiet.
+      if (body?.plate) { setAnprMsg(`couldn't match plate ${body.plate} at exit — scan the QR or type the code`); setCam('qr') }
+      else setErr(e.message)
+    } finally { setBusy(false); refresh() }
   }
   const doReassign = async (to_lot) => {
     if (!result?.booking_id || !to_lot) return
@@ -207,11 +227,18 @@ ZONE_ID=indore CHECKPOINT_ID=cp-indore CENTRAL_URL=http://127.0.0.1:8000 \
                   </div>
                 )}
 
-                {result.offline && (
-                  <div className="mt-3">
-                    <span className="inline-block bg-black/25 rounded-full px-4 py-1 text-sm font-semibold">
-                      decided OFFLINE
-                    </span>
+                {(result.offline || result.resolved_by === 'plate') && (
+                  <div className="mt-3 flex items-center justify-center gap-2 flex-wrap">
+                    {result.resolved_by === 'plate' && (
+                      <span className="inline-block bg-black/25 rounded-full px-4 py-1 text-sm font-semibold">
+                        🚗 read by camera (ANPR)
+                      </span>
+                    )}
+                    {result.offline && (
+                      <span className="inline-block bg-black/25 rounded-full px-4 py-1 text-sm font-semibold">
+                        decided OFFLINE
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
@@ -252,19 +279,48 @@ ZONE_ID=indore CHECKPOINT_ID=cp-indore CENTRAL_URL=http://127.0.0.1:8000 \
                 ))}
               </div>
 
-              {/* Camera QR scan — point the pass at the lens; it auto-feeds the
-                  token and acts (admit/exit) offline-capably, no typing. */}
+              {/* Camera capture — ANPR reads the number plate and auto-decides;
+                  QR scans the pass; both act (admit/exit) offline-capably. The
+                  operator can flip source any time, and manual entry is below. */}
               <div className="flex items-center justify-between mb-3">
                 <div>
-                  <div className="text-base font-semibold text-slate-800">📷 Scan QR with camera</div>
+                  <div className="text-base font-semibold text-slate-800">📷 Camera</div>
                   <div className="text-sm text-slate-500">
-                    {isExit ? 'Auto-reads & frees the parking space — hands-free.'
-                      : 'Auto-reads & verifies — hands-free at the gate.'}
+                    {camMode === 'anpr'
+                      ? (isExit ? 'Reads the plate & frees the space — hands-free.'
+                                : 'Reads the plate & admits automatically — hands-free.')
+                      : camMode === 'qr'
+                        ? (isExit ? 'Scan the pass QR to free the space.' : 'Scan the pass QR to verify.')
+                        : 'Camera off — use manual entry below.'}
                   </div>
                 </div>
-                <Switch on={scanning} onClick={() => setScanning((s) => !s)} onLabel="CAM ON" offLabel="CAM OFF" />
               </div>
-              {scanning && (
+              <div className="grid grid-cols-3 gap-2 mb-4 p-1 bg-slate-100 rounded-xl">
+                {[['anpr', '🚗 Plate (ANPR)'], ['qr', '▦ QR'], ['off', '✕ Off']].map(([m, lbl]) => (
+                  <button key={m} onClick={() => { setCam(m); setAnprMsg('') }}
+                    className={`rounded-lg py-2 text-sm font-semibold transition
+                      ${camMode === m ? 'bg-white text-slate-900 shadow' : 'text-slate-600 hover:text-slate-800'}`}>
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+
+              {anprMsg && (
+                <div className="mb-4 text-sm bg-amber-100 text-amber-800 rounded-xl px-4 py-2">
+                  ⚠ {anprMsg}
+                </div>
+              )}
+
+              {camMode === 'anpr' && (
+                <div className="mb-5">
+                  <PlateScanner onPlate={onPlate} paused={busy} />
+                  <p className="text-xs text-slate-400 mt-2">
+                    Auto-matches the read plate to a booking offline. If it can’t read or match,
+                    switch to QR or type the code — those never need the camera.
+                  </p>
+                </div>
+              )}
+              {camMode === 'qr' && (
                 <div className="mb-5">
                   <QrScanner onDetect={onScan} paused={busy} />
                   <p className="text-xs text-slate-400 mt-2">

@@ -3,8 +3,8 @@
 # the project .venv; the frontend runs from project-local node_modules. Nothing
 # is installed on the host system.
 #
-#   ./scripts/run.sh            # central + 1 checkpoint (indore) + frontend
-#   CHECKPOINTS="indore dewas"  ./scripts/run.sh   # multiple checkpoint nodes
+#   ./scripts/run.sh            # central + both checkpoints (indore, dewas) + frontend
+#   CHECKPOINTS="indore"        ./scripts/run.sh   # override the node list
 #
 # Ctrl-C stops everything.
 set -euo pipefail
@@ -26,7 +26,7 @@ echo "▶ Central command  → http://127.0.0.1:8000"
 PIDS+=($!)
 
 PORT=8001
-for ZONE in ${CHECKPOINTS:-indore}; do
+for ZONE in ${CHECKPOINTS:-indore dewas}; do
   echo "▶ Checkpoint $ZONE   → http://127.0.0.1:$PORT"
   ( cd backend/checkpoint && ZONE_ID="$ZONE" CHECKPOINT_ID="cp-$ZONE" \
       CENTRAL_URL="http://127.0.0.1:8000" \

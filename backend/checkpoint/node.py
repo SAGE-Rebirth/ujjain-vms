@@ -344,6 +344,7 @@ def reassign(req: ReassignReq):
 class VerifyReq(BaseModel):
     token: str | None = Field(default=None, max_length=4096)  # full QR payload
     code: str | None = Field(default=None, max_length=16)     # 6-char operator fallback
+    plate: str | None = Field(default=None, max_length=20)    # ANPR-read plate (camera)
     observed_plate: str | None = Field(default=None, max_length=20)  # plate seen on vehicle
 
 
@@ -494,15 +495,47 @@ def _decide(conn, req: VerifyReq) -> dict:
         if cached["zone_id"] != ZONE_ID:
             return {"decision": "deny", "reason": "wrong zone",
                     "booking_id": booking_id}
+    elif req.plate:
+        # ANPR path — the camera read a plate; resolve the booking by matching it
+        # against the locally-cached plates for THIS zone. Fully offline: the plate
+        # came down at the last sync, same trust model as the code path. On no match
+        # the caller falls back to QR / manual code (plate_unmatched signals the UI).
+        target = tickets.normalize_plate(req.plate)
+        if not target:
+            return {"decision": "deny", "reason": "no plate read", "booking_id": None,
+                    "plate_unmatched": True}
+        rows = conn.execute(
+            "SELECT * FROM cached_bookings WHERE zone_id=?", (ZONE_ID,)).fetchall()
+        matches = [r for r in rows
+                   if tickets.normalize_plate(r["plate"]) == target]
+        if not matches:
+            return {"decision": "deny",
+                    "reason": "plate not in local cache — scan QR or type code",
+                    "booking_id": None, "plate_unmatched": True,
+                    "observed_plate": target}
+        # Prefer a live (un-arrived) pass so a plate maps to the entry, not a spent
+        # one; a duplicate/departed match still resolves and the status checks below
+        # produce the right "already used / already exited" deny.
+        rank = {"booked": 0, "": 0, "arrived": 1, "departed": 2}
+        cached = sorted(matches, key=lambda r: rank.get(r["status"], 3))[0]
+        booking_id = cached["id"]
+        vtype = cached["vtype"]
+        stype = cached["slot_type"]
+        # Normalized so the binding check below can't false-deny on spacing.
+        expected_plate = tickets.normalize_plate(cached["plate"])
+        plate_last = tickets.plate_last4(expected_plate)
+        vdesc = cached["vdesc"] or ""
     else:
-        return {"decision": "deny", "reason": "no token or code",
+        return {"decision": "deny", "reason": "no token, code or plate",
                 "booking_id": None}
 
     # Vehicle binding (anti-transfer): the observed plate must match the pass.
     # Compared against the FULL plate if cached, else against the keyed HMAC from
     # the token — both fully offline, both privacy-preserving (the QR never carries
     # cleartext plate). A clone is useless on a different vehicle.
-    observed = tickets.normalize_plate(req.observed_plate)
+    # The ANPR read doubles as the observed plate — resolving a booking by plate
+    # already proves the vehicle matches its pass, so binding is satisfied.
+    observed = tickets.normalize_plate(req.observed_plate or req.plate)
     plate_secret = state_get(conn, "plate_secret") or None
     matched = None
     if observed:
@@ -565,11 +598,12 @@ def _decide(conn, req: VerifyReq) -> dict:
         reason += f" · OVERFLOW → {lot_name}"
     elif lot_name:
         reason += f" · park at {lot_name}"
+    resolved_by = "plate" if req.plate else "code" if req.code else "token"
     return {"decision": "admit", "reason": reason, "booking_id": booking_id,
             "vtype": vtype, "stype": stype, "soft_green": soft_green,
             "plate_checked": plate_checked, "assigned_lot": assigned_lot,
             "lot_name": lot_name, "overflow": bool(overflow_from),
-            "overflow_from": overflow_from, **vehicle}
+            "overflow_from": overflow_from, "resolved_by": resolved_by, **vehicle}
 
 
 @app.post("/verify")
@@ -639,6 +673,14 @@ def gate_exit(req: VerifyReq):
         row = conn.execute("SELECT id FROM cached_bookings WHERE code=?",
                             (req.code.strip().upper(),)).fetchone()
         bid = row["id"] if row else None
+    elif req.plate:
+        # ANPR exit: match the read plate against parked (arrived) vehicles in-zone.
+        target = tickets.normalize_plate(req.plate)
+        rows = conn.execute(
+            "SELECT id,plate FROM cached_bookings WHERE zone_id=? AND status='arrived'",
+            (ZONE_ID,)).fetchall()
+        m = [r for r in rows if tickets.normalize_plate(r["plate"]) == target]
+        bid = m[0]["id"] if m else None
     if not bid:
         conn.close()
         raise HTTPException(404, "vehicle not recognised")
